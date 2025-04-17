@@ -53,11 +53,12 @@
    - [x] Define regex patterns for `.env`, AWS, JWT, SSH keys
    - [x] Integrate an entropy checker (e.g., Shannon entropy > threshold)
 2. **File traversal**  
-   - [x] Walk directory tree, skip default excludes (`node_modules`, `dist`)
+   - [x] Walk directory tree, skip default excludes (`node_modules`, `dist`, lockfiles, tsconfig.json, README.md)
    - [x] Honor `.vibesafeignore` entries
 3. **Scoring & output**  
    - [x] Assign Low/Med/High severity based on pattern + entropy
    - [x] Emit JSON record per finding including `file`, `line`, `pattern`, and `severity`  
+   - [x] Added 'Info' severity for secrets in `.env` files (reduces noise)
 
 ### Phase 3: Dependency & CVE Scanner
 1. **Detect package manager**  
@@ -102,14 +103,15 @@
 
 ### Phase 5: CLI UX & Packaging
 1. **Terminal polish**  
-   - [ ] Colorize severities (e.g., red for High)  
-   - [ ] Add progress spinner during scans  
+   - [x] Colorize severities (e.g., red for High)
+   - [x] Add progress spinner during scans
 2. **Flags & outputs**  
-   - [ ] `--output <file.md|.json>`  
-   - [ ] `--high-only` filter  
+   - [x] `--output <file.json>`
+   - [x] `--report <file.md>`
+   - [x] `--high-only` filter
 3. **Distribution**  
-   - [ ] Set up npm `bin` or Python `entry_point`  
-   - [ ] Test on macOS, Win, Linux  
+   - [x] Set up npm `bin` entry_point
+   - [x] Test on macOS
 
 ## 6. Timeline & Ownership
 

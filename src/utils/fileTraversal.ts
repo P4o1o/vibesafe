@@ -15,6 +15,11 @@ const DEFAULT_IGNORE_PATTERNS = [
   '.DS_Store',
   'Thumbs.db',
   // Add other common ignores if needed
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'tsconfig.json',
+  'README.md',
 ];
 
 const VIBESAFE_IGNORE_FILE = '.vibesafeignore';
