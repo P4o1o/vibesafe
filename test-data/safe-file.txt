@@ -1,0 +1,3 @@
+This file contains no secrets.
+It is perfectly safe.
+Just some normal text here. 
