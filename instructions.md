@@ -93,18 +93,15 @@
 
 ### Phase 6: Additional Common Checks
 1. **Insecure Default Configurations**  
-   - [ ] Scan config files (JSON/YAML) for flags like `DEBUG=true`, `devMode`, or permissive CORS (`*` origins)  
+   - [x] Scan config files (JSON/YAML) for flags like `DEBUG=true`, `devMode`, or permissive CORS (`*` origins)  
 2. **Unvalidated File Uploads**  
-   - [ ] Detect code handling file uploads (e.g., multer, busboy) without size/type restrictions  
+   - [x] Detect code handling file uploads (e.g., multer, busboy, formidable, express-fileupload, generic patterns) without size/type restrictions  
 3. **Exposed Debug/Admin Endpoints**  
-   - [ ] Search for routes named `/debug`, `/admin`, `/console`  
-   - [ ] Flag those without authentication or middleware checks  
+   - [x] Search for routes named `/debug`, `/admin`, `/status`, `/info`, etc. using framework patterns or string literals
+   - [ ] Flag those without authentication or middleware checks // (Future enhancement - complex)
 4. **Lack of Rate‑Limiting**  
    - [ ] Identify HTTP handlers or clients missing rate‑limiter middleware (e.g., express-rate-limit)  
-   - [ ] Flag missing throttle/retry settings in HTTP client code  
-5. **Insufficient Logging & Error Sanitization**  
-   - [ ] Find logging of full error objects or stack traces (e.g., `console.error(err)`)  
-   - [ ] Detect logging of PII or sensitive data in plain text  
+   - [ ] Flag missing throttle/retry settings in HTTP client code
 
 ## 6. Risks & Mitigations
 
@@ -124,4 +121,4 @@
 **Next Steps:**  
 1. Tackle Phase 6 atomic tasks in order.  
 2. Validate each check against representative repos.  
-3. Prepare to expand into “Most Dangerous” vulnerability scans once Phase 6 is done.  
+3. Prepare to expand into "Most Dangerous" vulnerability scans once Phase 6 is done.  

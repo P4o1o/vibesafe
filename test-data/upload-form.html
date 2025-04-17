@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload Test Form</title>
+</head>
+<body>
+
+<h1>Simple File Upload Form</h1>
+
+<form action="/submit-upload" method="post" enctype="multipart/form-data">
+    <div>
+        <label for="fileInput">Choose file to upload:</label>
+        <!-- This is the element the scanner should detect -->
+        <input type="file" id="fileInput" name="userFile">
+    </div>
+    <div>
+        <label for="description">Description:</label>
+        <input type="text" id="description" name="description">
+    </div>
+    <div>
+        <button type="submit">Upload File</button>
+    </div>
+</form>
+
+<hr>
+
+<h1>Another Form</h1>
+<!-- Test with single quotes and extra attributes -->
+<form action="/submit-other" method='post' enctype='multipart/form-data'>
+    <input 
+        type='file' 
+        id='otherFile' 
+        name='otherUserFile'
+        accept=".jpg,.png"
+        required
+    >
+    <button type='submit'>Upload Image</button>
+</form>
+
+<!-- Link to the JS file (optional for testing the HTML pattern) -->
+<!-- <script src="generic-upload-test.js"></script> -->
+
+</body>
+</html> 

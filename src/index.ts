@@ -11,11 +11,14 @@ import { generateMarkdownReport } from './reporting/markdown';
 import path from 'path';
 import fs from 'fs';
 import chalk from 'chalk';
+import { scanConfigFile, ConfigFinding } from './scanners/configuration';
+import { scanForUnvalidatedUploads, UploadFinding } from './scanners/uploads';
+import { scanForExposedEndpoints, EndpointFinding } from './scanners/endpoints';
 
 // Define a combined finding type if needed later
 
 // Helper for coloring severities
-function colorSeverity(severity: FindingSeverity | SecretFinding['severity']): string {
+function colorSeverity(severity: FindingSeverity | SecretFinding['severity'] | UploadFinding['severity']): string {
     switch (severity) {
         case 'Critical': return chalk.red.bold(severity);
         case 'High': return chalk.red(severity);
@@ -37,7 +40,7 @@ program.command('scan')
   .description('Scan a directory for potential security issues.')
   .argument('[directory]', 'Directory to scan', '.')
   .option('-o, --output <file>', 'Specify JSON output file path (e.g., report.json)')
-  .option('-r, --report <file>', 'Specify Markdown report file path (e.g., report.md)')
+  .option('-r, --report [file]', 'Specify Markdown report file path (defaults to VIBESAFE-REPORT.md)')
   .option('--high-only', 'Only report high severity issues')
   .action(async (directory, options) => {
     const rootDir = path.resolve(directory);
@@ -46,10 +49,21 @@ program.command('scan')
       console.log('(--high-only flag detected)');
     }
     if (options.output) {
-      console.log(`Output will be written to: ${options.output}`);
+      console.log(`JSON output will be written to: ${options.output}`);
     }
-    if (options.report) {
-        console.log(`Markdown report will be written to: ${options.report}`);
+    
+    // Determine report path based on options
+    let reportPath: string | null = null;
+    if (options.report) { // Check if -r or --report was used
+        if (typeof options.report === 'string') {
+            // User provided a specific filename
+            reportPath = path.resolve(options.report);
+            console.log(`Markdown report will be written to: ${reportPath}`);
+        } else {
+            // User used the flag without a filename, use default
+            reportPath = path.join(rootDir, 'VIBESAFE-REPORT.md');
+            console.log(`Markdown report will be written to default location: ${reportPath}`);
+        }
     }
 
     // --- Moved: Check .gitignore Status --- 
@@ -59,9 +73,13 @@ program.command('scan')
     // --- Findings Aggregation ---
     let allSecretFindings: SecretFinding[] = [];
     let allDependencyFindings: DependencyFinding[] = [];
+    let allConfigFindings: ConfigFinding[] = [];
+    let allUploadFindings: UploadFinding[] = [];
+    let allEndpointFindings: EndpointFinding[] = [];
 
     // --- File Traversal (Phase 2.2) ---
     const filesToScan = getFilesToScan(directory);
+    const configFilesToScan = filesToScan.filter(f => /\.(json|ya?ml)$/i.test(f));
 
     // --- Detect Package Manager (Phase 3.1) ---
     const detectedManagers = detectPackageManagers(filesToScan, rootDir);
@@ -93,6 +111,48 @@ program.command('scan')
         console.log('Skipping CVE lookup as no dependencies were parsed.');
     }
 
+    // --- Configuration Scan (Phase 6.1) ---
+    console.log(`Scanning ${configFilesToScan.length} potential config files...`);
+    configFilesToScan.forEach(filePath => {
+        const findings = scanConfigFile(filePath);
+        const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
+        allConfigFindings = allConfigFindings.concat(relativeFindings);
+    });
+
+    // --- Upload Scan (Phase 6.2) ---
+    // Define file extensions relevant for upload checks
+    const UPLOAD_SCAN_EXTENSIONS = new Set(['.js', '.ts', '.jsx', '.tsx', '.vue', '.html']);
+    const filesForUploadScan = filesToScan.filter(f => UPLOAD_SCAN_EXTENSIONS.has(path.extname(f).toLowerCase()));
+    console.log(`Scanning ${filesForUploadScan.length} files for potential upload issues...`);
+    filesForUploadScan.forEach(filePath => {
+        try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const findings = scanForUnvalidatedUploads(filePath, content);
+            const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
+            allUploadFindings = allUploadFindings.concat(relativeFindings);
+        } catch (error: any) {
+            // Avoid crashing if a single file fails (e.g., read permission)
+            console.warn(chalk.yellow(`Could not scan ${path.relative(rootDir, filePath)} for uploads: ${error.message}`));
+        }
+    });
+
+    // --- Endpoint Scan (Phase 6.3) ---
+    // Define file extensions relevant for endpoint checks (JS/TS files)
+    const ENDPOINT_SCAN_EXTENSIONS = new Set(['.js', '.ts', '.jsx', '.tsx']);
+    const filesForEndpointScan = filesToScan.filter(f => ENDPOINT_SCAN_EXTENSIONS.has(path.extname(f).toLowerCase()));
+    console.log(`Scanning ${filesForEndpointScan.length} files for potentially exposed endpoints...`);
+    filesForEndpointScan.forEach(filePath => {
+        try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const findings = scanForExposedEndpoints(filePath, content);
+            const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
+            allEndpointFindings = allEndpointFindings.concat(relativeFindings);
+        } catch (error: any) {
+            // Avoid crashing if a single file fails (e.g., read permission)
+            console.warn(chalk.yellow(`Could not scan ${path.relative(rootDir, filePath)} for endpoints: ${error.message}`));
+        }
+    });
+
     // Separate Info findings
     const infoSecretFindings = allSecretFindings.filter(f => f.severity === 'Info');
     const standardSecretFindings = allSecretFindings.filter(f => f.severity !== 'Info');
@@ -106,13 +166,31 @@ program.command('scan')
       ? allDependencyFindings.filter(dep => (dep.maxSeverity === 'High' || dep.maxSeverity === 'Critical')) // Exclude errors when highOnly
       : allDependencyFindings.filter(dep => dep.vulnerabilities.length > 0 || dep.error);
 
+    // Filter config findings based on high-only flag if needed (e.g., only High CORS)
+    const reportConfigFindings = options.highOnly
+      ? allConfigFindings.filter(f => f.severity === 'High' || f.severity === 'Critical')
+      : allConfigFindings;
+
+    // Filter upload findings (adjust severity filtering as needed)
+    const reportUploadFindings = options.highOnly
+      ? allUploadFindings.filter(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium') // Example: Include Medium for uploads even with --high-only?
+      : allUploadFindings;
+
+    // Filter endpoint findings (e.g., keep Medium+ for high-only)
+    const reportEndpointFindings = options.highOnly
+        ? allEndpointFindings.filter(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium') 
+        : allEndpointFindings;
+
     // --- NOW Check Gitignore Status --- 
     gitignoreWarnings = checkGitignoreStatus(rootDir);
 
     // --- Output Generation ---
     const reportData = { 
-        secretFindings: reportSecretFindings, // Report only standard secrets
-        dependencyFindings: reportDependencyFindings 
+        secretFindings: reportSecretFindings, 
+        dependencyFindings: reportDependencyFindings, 
+        configFindings: reportConfigFindings,
+        uploadFindings: reportUploadFindings,
+        endpointFindings: reportEndpointFindings
     };
 
     // Generate JSON if requested
@@ -121,6 +199,9 @@ program.command('scan')
             const outputJsonData = {
                 secrets: reportSecretFindings,
                 dependencies: reportDependencyFindings,
+                configuration: reportConfigFindings,
+                uploads: reportUploadFindings,
+                endpoints: reportEndpointFindings
             }
             fs.writeFileSync(options.output, JSON.stringify(outputJsonData, null, 2));
             console.log(`JSON results successfully written to ${options.output}`);
@@ -131,19 +212,19 @@ program.command('scan')
     }
 
     // Generate Markdown Report if requested
-    if (options.report) {
+    if (reportPath) { 
         try {
             // Await the async report generation
             const markdownContent = await generateMarkdownReport(reportData); 
-            fs.writeFileSync(options.report, markdownContent);
-            console.log(`Markdown report successfully written to ${options.report}`);
+            fs.writeFileSync(reportPath, markdownContent);
+            console.log(`Markdown report successfully written to ${reportPath}`);
         } catch (error) {
-             console.error(`Error writing Markdown report file ${options.report}:`, error);
+             console.error(`Error writing Markdown report file ${reportPath}:`, error);
         }
     }
 
     // Print to console ONLY if neither JSON nor Markdown output was specified
-    if (!options.output && !options.report) {
+    if (!options.output && !reportPath) {
         
         // Print Configuration Warnings FIRST (after scans, before results)
         if (gitignoreWarnings.length > 0) {
@@ -164,11 +245,14 @@ program.command('scan')
             });
         }
 
-        // Check if any standard findings exist
+        // Check if any standard findings exist (including config)
         const hasStandardSecrets = reportSecretFindings.length > 0;
         const hasDependencyIssues = reportDependencyFindings.length > 0;
+        const hasConfigIssues = reportConfigFindings.length > 0;
+        const hasUploadIssues = reportUploadFindings.length > 0;
+        const hasEndpointIssues = reportEndpointFindings.length > 0;
 
-        if (hasStandardSecrets || hasDependencyIssues) {
+        if (hasStandardSecrets || hasDependencyIssues || hasConfigIssues || hasUploadIssues || hasEndpointIssues) {
             // Print standard secrets to console if found
             if (hasStandardSecrets) {
                 console.log(chalk.bold('\nPotential Secrets Found:'));
@@ -192,6 +276,43 @@ program.command('scan')
                     }
                 });
             }
+
+            // Print config findings to console if found
+            if (hasConfigIssues) {
+                console.log(chalk.bold('\nConfiguration Issues Found:'));
+                reportConfigFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity));
+                reportConfigFindings.forEach(finding => {
+                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type}: ${chalk.cyan(finding.file)} - Key: ${chalk.magenta(finding.key)}, Value: ${chalk.yellow(JSON.stringify(finding.value))}`);
+                    console.log(chalk.dim(`    > ${finding.message}`));
+                });
+            }
+
+            // Print upload findings to console if found
+            if (hasUploadIssues) {
+                console.log(chalk.bold('\nPotential Upload Issues Found:'));
+                reportUploadFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity));
+                reportUploadFindings.forEach(finding => {
+                    // Customize console output for upload findings
+                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
+                    console.log(chalk.dim(`    > ${finding.message}`));
+                    if (finding.details) {
+                         console.log(chalk.dim(`      ${finding.details}`));
+                    }
+                });
+            }
+
+            // Print endpoint findings to console if found
+            if (hasEndpointIssues) {
+                console.log(chalk.bold('\nPotentially Exposed Endpoints Found:'));
+                reportEndpointFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity));
+                reportEndpointFindings.forEach(finding => {
+                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
+                    console.log(chalk.dim(`    > Path: ${chalk.magenta(finding.path)} - ${finding.message}`));
+                    if (finding.details) {
+                         console.log(chalk.dim(`      Context: ${finding.details}`));
+                    }
+                });
+            }
         } else {
             // All Clear! Print positive message.
             // Check if we actually scanned for dependencies before saying no vulns found
@@ -210,8 +331,11 @@ program.command('scan')
     // Info findings should NOT affect exit code
     const highSeveritySecrets = reportSecretFindings.some(f => f.severity === 'High');
     const highSeverityDeps = reportDependencyFindings.some(d => d.maxSeverity === 'High' || d.maxSeverity === 'Critical');
+    const highSeverityConfig = reportConfigFindings.some(f => f.severity === 'High' || f.severity === 'Critical');
+    const highSeverityUploads = reportUploadFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium');
+    const highSeverityEndpoints = reportEndpointFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium');
 
-    if (options.highOnly && (highSeveritySecrets || highSeverityDeps)) {
+    if (options.highOnly && (highSeveritySecrets || highSeverityDeps || highSeverityConfig || highSeverityUploads || highSeverityEndpoints)) {
         console.log('Exiting with code 1 due to High/Critical severity findings (--high-only specified).');
         process.exit(1);
     }

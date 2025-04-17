@@ -1,6 +1,9 @@
 import OpenAI from 'openai';
 import { SecretFinding } from '../scanners/secrets';
 import { DependencyFinding } from '../scanners/dependencies';
+import { ConfigFinding } from '../scanners/configuration';
+import { UploadFinding } from '../scanners/uploads';
+import { EndpointFinding } from '../scanners/endpoints';
 import ora from 'ora';
 
 // Initialize OpenAI client
@@ -21,11 +24,17 @@ try {
 interface ReportData {
     secretFindings: SecretFinding[];
     dependencyFindings: DependencyFinding[];
+    configFindings: ConfigFinding[];
+    uploadFindings: UploadFinding[];
+    endpointFindings: EndpointFinding[];
 }
 
 // Limit the amount of data sent to the LLM to manage cost/context window
 const MAX_SECRETS_FOR_AI = 10;
 const MAX_DEPS_FOR_AI = 15;
+const MAX_CONFIG_FOR_AI = 10;
+const MAX_UPLOADS_FOR_AI = 10;
+const MAX_ENDPOINTS_FOR_AI = 10;
 
 /**
  * Generates AI-powered fix suggestions based on findings.
@@ -41,22 +50,37 @@ export async function getAiFixSuggestions(reportData: ReportData): Promise<strin
     const summarizedData = {
         secrets: reportData.secretFindings
             .slice(0, MAX_SECRETS_FOR_AI)
-            .map(f => ({ file: f.file, line: f.line, type: f.type, severity: f.severity })), // Keep severity
+            .map(f => ({ file: f.file, line: f.line, type: f.type, severity: f.severity })),
         dependencies: reportData.dependencyFindings
-            .filter(f => f.vulnerabilities.length > 0) // Only include deps with vulns
+            .filter(f => f.vulnerabilities.length > 0)
             .slice(0, MAX_DEPS_FOR_AI)
-            .map(d => ({ name: d.name, version: d.version, maxSeverity: d.maxSeverity, cveIds: d.vulnerabilities.map(v => v.id).slice(0, 3) }))
+            .map(d => ({ name: d.name, version: d.version, maxSeverity: d.maxSeverity, cveIds: d.vulnerabilities.map(v => v.id).slice(0, 3) })),
+        configuration: reportData.configFindings
+            .slice(0, MAX_CONFIG_FOR_AI)
+            .map(c => ({ file: c.file, key: c.key, value: c.value, type: c.type, severity: c.severity })),
+        uploads: reportData.uploadFindings
+            .slice(0, MAX_UPLOADS_FOR_AI)
+            .map(u => ({ file: u.file, line: u.line, type: u.type, severity: u.severity, message: u.message })),
+        endpoints: reportData.endpointFindings
+            .slice(0, MAX_ENDPOINTS_FOR_AI)
+            .map(e => ({ file: e.file, line: e.line, path: e.path, type: e.type, severity: e.severity }))
     };
 
     // Only proceed if there are actual findings to report
-    if (summarizedData.secrets.length === 0 && summarizedData.dependencies.length === 0) {
+    if (summarizedData.secrets.length === 0 && 
+        summarizedData.dependencies.length === 0 && 
+        summarizedData.configuration.length === 0 && 
+        summarizedData.uploads.length === 0 &&
+        summarizedData.endpoints.length === 0) {
         return '*No significant issues found requiring AI suggestions.*';
     }
 
     const prompt = `
 You are a helpful security assistant integrated into a tool called VibeSafe.
-Given the following security findings from a code scan (JSON format), provide a concise, actionable list of fix suggestions in Markdown format.
+Given the following security findings (secrets, dependency vulnerabilities, configuration issues, upload handling issues, potentially exposed endpoints) from a code scan (JSON format), provide a concise, actionable list of fix suggestions in Markdown format.
 Focus on the most impactful recommendations based on severity and type.
+For upload issues, suggest adding file size limits and type filtering.
+For endpoint issues, suggest reviewing access controls (authentication/authorization) or removing the endpoint if unnecessary.
 Keep suggestions brief and practical for a developer. Prioritize high/critical issues.
 Structure the output as a numbered list.
 

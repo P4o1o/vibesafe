@@ -1,0 +1,12 @@
+{
+    "appName": "TestApp",
+    "port": 8080,
+    "debug": true,
+    "cors": {
+        "origin": "*",
+        "methods": ["GET", "POST"]
+    },
+    "database": {
+        "url": "mongodb://localhost:27017/testdb"
+    }
+} 

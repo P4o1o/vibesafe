@@ -1,5 +1,8 @@
 import { SecretFinding } from '../scanners/secrets';
 import { DependencyFinding, FindingSeverity } from '../scanners/dependencies';
+import { ConfigFinding } from '../scanners/configuration';
+import { UploadFinding } from '../scanners/uploads';
+import { EndpointFinding } from '../scanners/endpoints';
 // Import the real function (or placeholder) from its own file
 import { getAiFixSuggestions } from './aiSuggestions'; 
 import path from 'path';
@@ -17,6 +20,9 @@ const severityOrder: Record<FindingSeverity | SecretFinding['severity'], number>
 interface ReportData {
     secretFindings: SecretFinding[];
     dependencyFindings: DependencyFinding[];
+    configFindings: ConfigFinding[];
+    uploadFindings: UploadFinding[];
+    endpointFindings: EndpointFinding[];
 }
 
 // --- Remove Placeholder AI Suggestion Function ---
@@ -29,11 +35,11 @@ async function getAiFixSuggestions(reportData: ReportData): Promise<string> {
 
 /**
  * Generates a Markdown report from scan findings (async).
- * @param data Object containing secret and dependency findings.
+ * @param data Object containing secret, dependency, config, and upload findings.
  * @returns A Promise resolving to a string containing the Markdown report.
  */
 export async function generateMarkdownReport(data: ReportData): Promise<string> {
-    const { secretFindings, dependencyFindings } = data;
+    const { secretFindings, dependencyFindings, configFindings, uploadFindings, endpointFindings } = data;
 
     // --- Calculate Summary --- 
     let totalIssues = 0;
@@ -63,6 +69,18 @@ export async function generateMarkdownReport(data: ReportData): Promise<string> 
             // Optionally count errors as issues? For now, no.
         }
     });
+    configFindings.forEach(f => {
+        severityCounts[f.severity]++;
+        totalIssues++;
+    });
+    uploadFindings.forEach(f => {
+        severityCounts[f.severity]++;
+        totalIssues++;
+    });
+    endpointFindings.forEach(f => {
+        severityCounts[f.severity]++;
+        totalIssues++;
+    });
 
     const summaryParts = [
         `Total Issues: ${totalIssues} (`,
@@ -75,29 +93,59 @@ export async function generateMarkdownReport(data: ReportData): Promise<string> 
     ].join('');
 
     // --- Build Details Table --- 
-    let detailsTable = `| File / Dependency | Location / Version | Issue Type       | Severity | CVEs / Pattern |
-| ----------------- | ------------------ | ---------------- | -------- | -------------- |
+    let detailsTable = `| Finding Type      | Severity | Location                         | Details                                      |
+| ----------------- | -------- | -------------------------------- | -------------------------------------------- |
 `;
 
-    // Combine and sort findings for the table (e.g., by severity)
+    // Combine and sort findings for the table
     const allFindings = [
-        ...secretFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], isSecret: true })),
-        ...dependencyFindings.filter(f => f.vulnerabilities.length > 0).map(f => ({ ...f, sortKey: severityOrder[f.maxSeverity], isSecret: false }))
+        ...secretFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Secret' as const })),
+        ...dependencyFindings.filter(f => f.vulnerabilities.length > 0).map(f => ({ ...f, sortKey: severityOrder[f.maxSeverity], findingCategory: 'Dependency' as const })),
+        ...configFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Configuration' as const })),
+        ...uploadFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Upload' as const })),
+        ...endpointFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Endpoint' as const }))
     ].sort((a, b) => b.sortKey - a.sortKey);
 
     allFindings.forEach(finding => {
-        if (finding.isSecret) {
-            const sf = finding as SecretFinding;
-            // Escape pipe characters in file paths for Markdown table
-            const escapedFile = sf.file.replace(/\|/g, '\\|');
-            detailsTable += `| ${escapedFile} | line ${sf.line} | Secret: ${sf.type} | ${sf.severity} | ${sf.type === 'High Entropy String' ? '(Entropy)' : '(Pattern)'} |
-`;
-        } else {
-            const df = finding as DependencyFinding;
-            const cveIds = df.vulnerabilities.map(v => v.id).join(', ');
-            detailsTable += `| ${df.name} | ${df.version} | Dependency Vuln | ${df.maxSeverity} | ${cveIds} |
-`;
+        const severity = finding.findingCategory === 'Dependency' ? finding.maxSeverity : finding.severity;
+        let location = '';
+        let details = '';
+
+        switch(finding.findingCategory) {
+            case 'Secret':
+                // Escape pipe characters in file paths for Markdown table
+                const escapedFile = finding.file.replace(/\|/g, '\\|');
+                location = `${escapedFile}:${finding.line}`;
+                details = `${finding.type} (${finding.type === 'High Entropy String' ? 'Entropy' : 'Pattern'})`;
+                break;
+            case 'Dependency':
+                location = `${finding.name}@${finding.version}`;
+                const cveIds = finding.vulnerabilities.map(v => v.id).join(', ');
+                details = `${finding.vulnerabilities.length} vulnerabilities (${cveIds})`;
+                break;
+            case 'Configuration':
+                 location = finding.file.replace(/\|/g, '\\|');
+                 details = `Key: ${finding.key}, Value: ${JSON.stringify(finding.value)} (${finding.type})`;
+                 break;
+            case 'Upload':
+                const escapedUploadFile = finding.file.replace(/\|/g, '\\|');
+                location = `${escapedUploadFile}:${finding.line}`;
+                details = `${finding.type}: ${finding.message}`;
+                if (finding.details) {
+                     details += ` (${finding.details.substring(0, 100)}${finding.details.length > 100 ? '...' : ''})`;
+                }
+                break;
+            case 'Endpoint':
+                const escapedEndpointFile = finding.file.replace(/\|/g, '\\|');
+                location = `${escapedEndpointFile}:${finding.line}`;
+                details = `${finding.type}: Path=\`${finding.path}\``;
+                if (finding.details) {
+                    details += ` (Context: ${finding.details.substring(0, 80)}${finding.details.length > 80 ? '...' : ''}`;
+                }
+                break;
         }
+        detailsTable += `| ${finding.findingCategory} | ${severity} | ${location} | ${details} |
+`;
     });
 
     // --- Get AI Suggestions ---
