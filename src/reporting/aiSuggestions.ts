@@ -4,6 +4,9 @@ import { DependencyFinding } from '../scanners/dependencies';
 import { ConfigFinding } from '../scanners/configuration';
 import { UploadFinding } from '../scanners/uploads';
 import { EndpointFinding } from '../scanners/endpoints';
+import { RateLimitFinding } from '../scanners/rateLimiting';
+import { ErrorLoggingFinding } from '../scanners/logging';
+import { HttpClientFinding } from '../scanners/httpClient';
 import ora from 'ora';
 
 // Initialize OpenAI client
@@ -27,6 +30,9 @@ interface ReportData {
     configFindings: ConfigFinding[];
     uploadFindings: UploadFinding[];
     endpointFindings: EndpointFinding[];
+    rateLimitFindings: RateLimitFinding[];
+    errorLoggingFindings: ErrorLoggingFinding[];
+    httpClientFindings: HttpClientFinding[];
 }
 
 // Limit the amount of data sent to the LLM to manage cost/context window
@@ -35,6 +41,9 @@ const MAX_DEPS_FOR_AI = 15;
 const MAX_CONFIG_FOR_AI = 10;
 const MAX_UPLOADS_FOR_AI = 10;
 const MAX_ENDPOINTS_FOR_AI = 10;
+const MAX_RATELIMIT_FOR_AI = 5;
+const MAX_LOGGING_FOR_AI = 10;
+const MAX_HTTPCLIENT_FOR_AI = 10;
 
 /**
  * Generates AI-powered fix suggestions based on findings.
@@ -63,7 +72,16 @@ export async function getAiFixSuggestions(reportData: ReportData): Promise<strin
             .map(u => ({ file: u.file, line: u.line, type: u.type, severity: u.severity, message: u.message })),
         endpoints: reportData.endpointFindings
             .slice(0, MAX_ENDPOINTS_FOR_AI)
-            .map(e => ({ file: e.file, line: e.line, path: e.path, type: e.type, severity: e.severity }))
+            .map(e => ({ file: e.file, line: e.line, path: e.path, type: e.type, severity: e.severity })),
+        rateLimiting: reportData.rateLimitFindings
+            .slice(0, MAX_RATELIMIT_FOR_AI)
+            .map(r => ({ file: r.file, line: r.line, type: r.type, severity: r.severity, message: r.message })),
+        logging: reportData.errorLoggingFindings
+            .slice(0, MAX_LOGGING_FOR_AI)
+            .map(l => ({ file: l.file, line: l.line, type: l.type, severity: l.severity, message: l.message })),
+        httpClients: reportData.httpClientFindings
+            .slice(0, MAX_HTTPCLIENT_FOR_AI)
+            .map(h => ({ file: h.file, line: h.line, type: h.type, library: h.library, severity: h.severity, message: h.message }))
     };
 
     // Only proceed if there are actual findings to report
@@ -71,16 +89,22 @@ export async function getAiFixSuggestions(reportData: ReportData): Promise<strin
         summarizedData.dependencies.length === 0 && 
         summarizedData.configuration.length === 0 && 
         summarizedData.uploads.length === 0 &&
-        summarizedData.endpoints.length === 0) {
+        summarizedData.endpoints.length === 0 &&
+        summarizedData.rateLimiting.length === 0 &&
+        summarizedData.logging.length === 0 &&
+        summarizedData.httpClients.length === 0) {
         return '*No significant issues found requiring AI suggestions.*';
     }
 
     const prompt = `
 You are a helpful security assistant integrated into a tool called VibeSafe.
-Given the following security findings (secrets, dependency vulnerabilities, configuration issues, upload handling issues, potentially exposed endpoints) from a code scan (JSON format), provide a concise, actionable list of fix suggestions in Markdown format.
+Given the following security findings (secrets, dependency vulnerabilities, configuration issues, upload handling issues, potentially exposed endpoints, potential missing rate limiting, potential unsanitized error logging, potential http client issues) from a code scan (JSON format), provide a concise, actionable list of fix suggestions in Markdown format.
 Focus on the most impactful recommendations based on severity and type.
 For upload issues, suggest adding file size limits and type filtering.
 For endpoint issues, suggest reviewing access controls (authentication/authorization) or removing the endpoint if unnecessary.
+For rate limiting issues, suggest adding a rate limiter like 'express-rate-limit' to relevant routes found in the specified file.
+For logging issues, suggest logging only specific, sanitized error information (like an error ID or message) instead of the full error object, especially in production.
+For HTTP client issues (like missing timeouts), suggest adding appropriate timeout values (e.g., \`timeout\` option for axios, \`AbortController\` with \`signal\` for fetch).
 Keep suggestions brief and practical for a developer. Prioritize high/critical issues.
 Structure the output as a numbered list.
 
@@ -100,7 +124,7 @@ Generate a numbered list of Markdown fix suggestions below:
                 { role: 'system', content: 'You are a helpful security assistant providing concise fix suggestions in Markdown format.' },
                 { role: 'user', content: prompt }
             ],
-            max_tokens: 350,
+            max_tokens: 400,
             temperature: 0.3,
             n: 1,
             stop: null,

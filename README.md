@@ -4,14 +4,17 @@ A CLI tool to scan your codebase for security vibes.
 
 VibeSafe helps developers quickly check their projects for common security issues like exposed secrets, outdated dependencies with known vulnerabilities (CVEs), and generates helpful reports.
 
-## Features (MVP)
+## Features
 
-*   **Secret Scanning:** Detects potential secrets (API keys, credentials) using regex patterns and entropy analysis.
-*   **Dependency Scanning:** Parses package manifests (currently `package.json`) and checks dependencies against the OSV.dev vulnerability database.
-*   **Configuration Scanning:** Checks configuration files (JSON, YAML) for common insecure settings (e.g., `DEBUG=true`, permissive CORS).
-*   **Unvalidated Upload Detection:** Identifies potential missing file size/type restrictions in common upload libraries (e.g., `multer`, `formidable`) and generic patterns (`FormData`, `<input type="file">`).
-*   **Exposed Endpoint Detection:** Flags potentially sensitive endpoints (e.g., `/admin`, `/debug`, `/status`) based on common patterns.
-*   **Multiple Output Formats:** Provides results via console output (with colors!), JSON (`--output`), or a Markdown report (`--report`).
+*   **Secret Scanning:** Detects potential secrets using regex patterns (AWS Keys, JWTs, SSH Keys, generic high-entropy strings) and specifically flags secrets found in `.env` files.
+*   **Dependency Scanning:** Parses `package.json` (for npm/yarn projects) and checks dependencies against the OSV.dev vulnerability database for known CVEs.
+*   **Configuration Scanning:** Checks JSON and YAML files for common insecure settings (e.g., `DEBUG = true`, `devMode = true`, permissive CORS like `origin: '*'`).
+*   **HTTP Client Issues:** Detects potential missing timeout or cancellation configurations in calls using `axios`, `fetch`, `got`, and `request`. (*See Limitations below*).
+*   **Unvalidated Upload Detection:** Identifies potential missing file size/type restrictions in common upload libraries (`multer`, `formidable`, `express-fileupload`, `busboy`) and generic patterns (`new FormData()`, `<input type="file">`).
+*   **Exposed Endpoint Detection:** Flags potentially sensitive endpoints (e.g., `/admin`, `/debug`, `/status`, `/info`, `/metrics`) in Express/Node.js applications using common routing patterns or string literals.
+*   **Rate Limit Check (Heuristic):** Suggests reviewing rate limiting if Express/Node.js routes are detected in a file without an `express-rate-limit` import.
+*   **Improper Error Logging Detection:** Flags potential logging of full error objects (e.g., `console.error(err)`, `logger.error(e)`), which can leak stack traces.
+*   **Multiple Output Formats:** Provides results via console output (with colors!), JSON (`--output`), or a Markdown report (`--report` with default `VIBESAFE-REPORT.md`).
 *   **AI-Powered Suggestions (Optional):** Generates fix suggestions in the Markdown report using OpenAI (requires API key).
 *   **Filtering:** Focus on high-impact issues using `--high-only`.
 *   **Customizable Ignores:** Use a `.vibesafeignore` file (similar syntax to `.gitignore`) to exclude specific files or directories from the scan.
@@ -78,6 +81,13 @@ To generate fix suggestions in the Markdown report, you need an OpenAI API key.
 ```bash
 vibesafe scan --high-only
 ```
+
+## Limitations
+
+*   **Superagent Timeouts:** The check for missing timeouts in the `superagent` HTTP client library is currently disabled due to complexities in accurately detecting chained method calls (like `.timeout()`) using AST. Calls using `superagent` will not be flagged for missing timeouts at this time. This is planned for a future enhancement.
+*   **Dynamic Configuration:** Checks rely on static analysis (AST parsing, regex). Timeouts or security settings configured dynamically (e.g., read from environment variables at runtime and passed into client options) may not be detected.
+*   **Rate Limiting:** The check is a heuristic based on the presence of route definitions and the *absence* of a specific import (`express-rate-limit`). It does not guarantee that rate limiting is actually missing or insufficient if implemented differently.
+*   **Authentication Checks:** Exposed endpoint detection does not currently verify if proper authentication or authorization middleware is applied to flagged routes.
 
 ## Ignoring Files (.vibesafeignore)
 

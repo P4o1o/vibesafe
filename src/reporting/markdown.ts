@@ -3,6 +3,9 @@ import { DependencyFinding, FindingSeverity } from '../scanners/dependencies';
 import { ConfigFinding } from '../scanners/configuration';
 import { UploadFinding } from '../scanners/uploads';
 import { EndpointFinding } from '../scanners/endpoints';
+import { RateLimitFinding } from '../scanners/rateLimiting';
+import { ErrorLoggingFinding } from '../scanners/logging';
+import { HttpClientFinding } from '../scanners/httpClient';
 // Import the real function (or placeholder) from its own file
 import { getAiFixSuggestions } from './aiSuggestions'; 
 import path from 'path';
@@ -23,6 +26,9 @@ interface ReportData {
     configFindings: ConfigFinding[];
     uploadFindings: UploadFinding[];
     endpointFindings: EndpointFinding[];
+    rateLimitFindings: RateLimitFinding[];
+    errorLoggingFindings: ErrorLoggingFinding[];
+    httpClientFindings: HttpClientFinding[];
 }
 
 // --- Remove Placeholder AI Suggestion Function ---
@@ -39,7 +45,7 @@ async function getAiFixSuggestions(reportData: ReportData): Promise<string> {
  * @returns A Promise resolving to a string containing the Markdown report.
  */
 export async function generateMarkdownReport(data: ReportData): Promise<string> {
-    const { secretFindings, dependencyFindings, configFindings, uploadFindings, endpointFindings } = data;
+    const { secretFindings, dependencyFindings, configFindings, uploadFindings, endpointFindings, rateLimitFindings, errorLoggingFindings, httpClientFindings } = data;
 
     // --- Calculate Summary --- 
     let totalIssues = 0;
@@ -81,6 +87,18 @@ export async function generateMarkdownReport(data: ReportData): Promise<string> 
         severityCounts[f.severity]++;
         totalIssues++;
     });
+    rateLimitFindings.forEach(f => {
+        severityCounts[f.severity]++;
+        totalIssues++;
+    });
+    errorLoggingFindings.forEach(f => {
+        severityCounts[f.severity]++;
+        totalIssues++;
+    });
+    httpClientFindings.forEach(f => {
+        severityCounts[f.severity]++;
+        totalIssues++;
+    });
 
     const summaryParts = [
         `Total Issues: ${totalIssues} (`,
@@ -103,7 +121,10 @@ export async function generateMarkdownReport(data: ReportData): Promise<string> 
         ...dependencyFindings.filter(f => f.vulnerabilities.length > 0).map(f => ({ ...f, sortKey: severityOrder[f.maxSeverity], findingCategory: 'Dependency' as const })),
         ...configFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Configuration' as const })),
         ...uploadFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Upload' as const })),
-        ...endpointFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Endpoint' as const }))
+        ...endpointFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Endpoint' as const })),
+        ...rateLimitFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'RateLimit' as const })),
+        ...errorLoggingFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'Logging' as const })),
+        ...httpClientFindings.map(f => ({ ...f, sortKey: severityOrder[f.severity], findingCategory: 'HttpClient' as const }))
     ].sort((a, b) => b.sortKey - a.sortKey);
 
     allFindings.forEach(finding => {
@@ -141,6 +162,30 @@ export async function generateMarkdownReport(data: ReportData): Promise<string> 
                 details = `${finding.type}: Path=\`${finding.path}\``;
                 if (finding.details) {
                     details += ` (Context: ${finding.details.substring(0, 80)}${finding.details.length > 80 ? '...' : ''}`;
+                }
+                break;
+            case 'RateLimit':
+                const escapedRateLimitFile = finding.file.replace(/\|/g, '\\|');
+                location = `${escapedRateLimitFile}:${finding.line}`;
+                details = finding.message;
+                if (finding.details) {
+                    details += ` (${finding.details.substring(0, 100)}${finding.details.length > 100 ? '...' : ''})`;
+                }
+                break;
+            case 'Logging':
+                const escapedLoggingFile = finding.file.replace(/\|/g, '\\|');
+                location = `${escapedLoggingFile}:${finding.line}`;
+                details = finding.message;
+                if (finding.details) {
+                    details += ` (${finding.details.substring(0, 100)}${finding.details.length > 100 ? '...' : ''})`;
+                }
+                break;
+            case 'HttpClient':
+                const escapedHttpClientFile = finding.file.replace(/\|/g, '\\|');
+                location = `${escapedHttpClientFile}:${finding.line}`;
+                details = `${finding.type} (${finding.library}): ${finding.message}`;
+                if (finding.details) {
+                    details += ` (${finding.details.substring(0, 100)}${finding.details.length > 100 ? '...' : ''})`;
                 }
                 break;
         }

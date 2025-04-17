@@ -100,8 +100,13 @@
    - [x] Search for routes named `/debug`, `/admin`, `/status`, `/info`, etc. using framework patterns or string literals
    - [ ] Flag those without authentication or middleware checks // (Future enhancement - complex)
 4. **Lack of Rate‑Limiting**  
-   - [ ] Identify HTTP handlers or clients missing rate‑limiter middleware (e.g., express-rate-limit)  
+   - [x] Identify files with route definitions but missing `express-rate-limit` import (heuristic)
    - [ ] Flag missing throttle/retry settings in HTTP client code
+   - [x] Detect missing timeout/cancellation in HTTP client calls (axios, fetch, got, request) // (Superagent check disabled due to AST complexity)
+   - [ ] *TODO: Implement reliable `superagent` timeout detection via AST*
+5. **Insufficient Logging & Error Sanitization**  
+   - [x] Find logging of full error objects or stack traces (e.g., `console.error(err)`)
+   - [ ] Detect logging of PII or sensitive data in plain text // (Future enhancement - complex)
 
 ## 6. Risks & Mitigations
 
