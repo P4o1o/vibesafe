@@ -24,6 +24,67 @@ const DEFAULT_IGNORE_PATTERNS = [
 
 const VIBESAFE_IGNORE_FILE = '.vibesafeignore';
 
+// --- .gitignore Check --- 
+
+// Patterns we want to ensure are typically ignored by users
+const SENSITIVE_PATTERNS_TO_CHECK = [
+    '.env',
+    '.env.*',       // Catch .env.local, .env.development etc.
+    '*.env',       // Catch other potential env files
+    // Add other common sensitive file patterns here if needed later
+    // e.g., '*.pem', '*.key'?
+];
+
+export interface GitignoreWarning {
+    type: 'MISSING' | 'PATTERN_NOT_IGNORED';
+    message: string;
+    pattern?: string; // The pattern that wasn't ignored
+}
+
+/**
+ * Checks if .gitignore exists and if it ignores common sensitive patterns.
+ * @param rootDir The root directory of the project.
+ * @returns An array of warning objects.
+ */
+export function checkGitignoreStatus(rootDir: string): GitignoreWarning[] {
+    const warnings: GitignoreWarning[] = [];
+    const gitignorePath = path.join(rootDir, '.gitignore');
+
+    if (!fs.existsSync(gitignorePath)) {
+        warnings.push({
+            type: 'MISSING',
+            message: '.gitignore file not found. Recommend creating one and adding sensitive files (like .env*, *.log) to prevent accidental commits.'
+        });
+        return warnings; // No point checking patterns if the file doesn't exist
+    }
+
+    try {
+        const gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
+        const ig = ignore().add(gitignoreContent);
+
+        SENSITIVE_PATTERNS_TO_CHECK.forEach(pattern => {
+            // Use a common example filename that matches the pattern
+            // Note: This check isn't perfect, complex patterns could behave differently,
+            // but it covers common cases like direct filenames or *.ext.
+            const testFileName = pattern.includes('*') ? pattern.replace('*.', 'example.') : pattern;
+            
+            if (!ig.ignores(testFileName)) {
+                warnings.push({
+                    type: 'PATTERN_NOT_IGNORED',
+                    message: `Pattern "${pattern}" is not covered by .gitignore. Consider adding it to prevent committing sensitive files.`, 
+                    pattern: pattern
+                });
+            }
+        });
+
+    } catch (error: any) {
+        console.warn(`Error reading or parsing .gitignore: ${error.message}`);
+        // Don't block the scan, just warn about the check failure
+    }
+
+    return warnings;
+}
+
 /**
  * Reads ignore patterns from .vibesafeignore file if it exists.
  * @param rootDir The root directory of the project.

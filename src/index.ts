@@ -6,7 +6,7 @@ import 'dotenv/config';
 import { Command } from 'commander';
 import { scanFileForSecrets, SecretFinding } from './scanners/secrets';
 import { detectPackageManagers, parseDependencies, lookupCves, DependencyInfo, DependencyFinding, FindingSeverity } from './scanners/dependencies';
-import { getFilesToScan } from './utils/fileTraversal';
+import { getFilesToScan, checkGitignoreStatus, GitignoreWarning } from './utils/fileTraversal';
 import { generateMarkdownReport } from './reporting/markdown';
 import path from 'path';
 import fs from 'fs';
@@ -51,6 +51,10 @@ program.command('scan')
     if (options.report) {
         console.log(`Markdown report will be written to: ${options.report}`);
     }
+
+    // --- Moved: Check .gitignore Status --- 
+    // We will call checkGitignoreStatus later, just declare the variable here
+    let gitignoreWarnings: GitignoreWarning[] = [];
 
     // --- Findings Aggregation ---
     let allSecretFindings: SecretFinding[] = [];
@@ -102,6 +106,9 @@ program.command('scan')
       ? allDependencyFindings.filter(dep => (dep.maxSeverity === 'High' || dep.maxSeverity === 'Critical')) // Exclude errors when highOnly
       : allDependencyFindings.filter(dep => dep.vulnerabilities.length > 0 || dep.error);
 
+    // --- NOW Check Gitignore Status --- 
+    gitignoreWarnings = checkGitignoreStatus(rootDir);
+
     // --- Output Generation ---
     const reportData = { 
         secretFindings: reportSecretFindings, // Report only standard secrets
@@ -137,6 +144,16 @@ program.command('scan')
 
     // Print to console ONLY if neither JSON nor Markdown output was specified
     if (!options.output && !options.report) {
+        
+        // Print Configuration Warnings FIRST (after scans, before results)
+        if (gitignoreWarnings.length > 0) {
+            console.log(chalk.yellow.bold('\n⚠️ Configuration Warnings:')); // Added emoji
+            gitignoreWarnings.forEach(warning => {
+                const emoji = warning.type === 'MISSING' ? '❓' : '❗'; // Different emojis
+                console.log(chalk.yellow(`  ${emoji} ${warning.message}`));
+            });
+        }
+
         // Handle Info findings first
         if (infoSecretFindings.length > 0) {
             console.log(chalk.blue.bold('\nInfo:'));
@@ -147,34 +164,43 @@ program.command('scan')
             });
         }
 
-        // Print standard secrets to console
-        if (reportSecretFindings.length > 0) {
-            console.log(chalk.bold('\nPotential Secrets Found:'));
-            reportSecretFindings.forEach(finding => {
-                console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
-            });
-        } else if (allSecretFindings.length === 0) {
-            // Only print "no secrets" if no standard *or* info secrets were found
-            console.log('No potential secrets found in scanned files.');
-        }
+        // Check if any standard findings exist
+        const hasStandardSecrets = reportSecretFindings.length > 0;
+        const hasDependencyIssues = reportDependencyFindings.length > 0;
 
-        // Print dependency findings to console
-        if (reportDependencyFindings.length > 0) {
-            console.log(chalk.bold('\nDependencies with Issues Found:'));
-            reportDependencyFindings.sort((a, b) => severityToSortOrder(b.maxSeverity) - severityToSortOrder(a.maxSeverity));
+        if (hasStandardSecrets || hasDependencyIssues) {
+            // Print standard secrets to console if found
+            if (hasStandardSecrets) {
+                console.log(chalk.bold('\nPotential Secrets Found:'));
+                reportSecretFindings.forEach(finding => {
+                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
+                });
+            }
 
-            reportDependencyFindings.forEach(dep => {
-                if (dep.error) {
-                    console.log(`  - [${chalk.red.bold('ERROR')}] ${chalk.magenta(dep.name)}@${chalk.gray(dep.version)}: (${dep.error})`);
-                } else if (dep.vulnerabilities.length > 0) {
-                    const cveIds = dep.vulnerabilities.map(v => v.id).slice(0,3).join(', ');
-                    const moreCvEs = dep.vulnerabilities.length > 3 ? '...' : '';
-                    // Apply color to severity and dependency name/version
-                    console.log(`  - [${colorSeverity(dep.maxSeverity)}] ${chalk.magenta(dep.name)}@${chalk.gray(dep.version)}: ${dep.vulnerabilities.length} vulnerabilities (${chalk.dim(cveIds)}${moreCvEs})`);
-                }
-            });
-        } else if (dependencyInfoList.length > 0 && !options.highOnly) {
-             console.log('\nNo vulnerabilities found matching criteria in scanned dependencies.');
+            // Print dependency findings to console if found
+            if (hasDependencyIssues) {
+                console.log(chalk.bold('\nDependencies with Issues Found:'));
+                reportDependencyFindings.sort((a, b) => severityToSortOrder(b.maxSeverity) - severityToSortOrder(a.maxSeverity));
+                reportDependencyFindings.forEach(dep => {
+                    if (dep.error) {
+                        console.log(`  - [${chalk.red.bold('ERROR')}] ${chalk.magenta(dep.name)}@${chalk.gray(dep.version)}: (${dep.error})`);
+                    } else if (dep.vulnerabilities.length > 0) {
+                        const cveIds = dep.vulnerabilities.map(v => v.id).slice(0,3).join(', ');
+                        const moreCvEs = dep.vulnerabilities.length > 3 ? '...' : '';
+                        // Apply color to severity and dependency name/version
+                        console.log(`  - [${colorSeverity(dep.maxSeverity)}] ${chalk.magenta(dep.name)}@${chalk.gray(dep.version)}: ${dep.vulnerabilities.length} vulnerabilities (${chalk.dim(cveIds)}${moreCvEs})`);
+                    }
+                });
+            }
+        } else {
+            // All Clear! Print positive message.
+            // Check if we actually scanned for dependencies before saying no vulns found
+            const scannedDeps = dependencyInfoList.length > 0;
+            console.log(chalk.green.bold('\n✅ No issues found! Keep up the good vibes! 😎'));
+            // Optionally add context:
+            if (!scannedDeps) {
+                 console.log(chalk.gray('  (Dependency vulnerability scan skipped as no supported package manager was detected)'));
+            }
         }
     }
 
