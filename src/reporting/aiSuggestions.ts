@@ -1,13 +1,15 @@
 import OpenAI from 'openai';
 import { SecretFinding } from '../scanners/secrets';
-import { DependencyFinding } from '../scanners/dependencies';
+import { DependencyFinding, FindingSeverity } from '../scanners/dependencies';
 import { ConfigFinding } from '../scanners/configuration';
 import { UploadFinding } from '../scanners/uploads';
 import { EndpointFinding } from '../scanners/endpoints';
 import { RateLimitFinding } from '../scanners/rateLimiting';
-import { ErrorLoggingFinding } from '../scanners/logging';
+import { LoggingFinding } from '../scanners/logging';
 import { HttpClientFinding } from '../scanners/httpClient';
 import ora from 'ora';
+import { GitignoreWarning } from '../utils/fileTraversal';
+import chalk from 'chalk';
 
 // Initialize OpenAI client
 // The constructor automatically looks for process.env.OPENAI_API_KEY
@@ -24,15 +26,17 @@ try {
     console.error('Error initializing OpenAI client:', error.message);
 }
 
-interface ReportData {
+export interface ReportData {
     secretFindings: SecretFinding[];
     dependencyFindings: DependencyFinding[];
     configFindings: ConfigFinding[];
     uploadFindings: UploadFinding[];
     endpointFindings: EndpointFinding[];
     rateLimitFindings: RateLimitFinding[];
-    errorLoggingFindings: ErrorLoggingFinding[];
+    loggingFindings: LoggingFinding[];
     httpClientFindings: HttpClientFinding[];
+    gitignoreWarnings: GitignoreWarning[];
+    infoSecretFindings: SecretFinding[];
 }
 
 // Limit the amount of data sent to the LLM to manage cost/context window
@@ -45,115 +49,81 @@ const MAX_RATELIMIT_FOR_AI = 5;
 const MAX_LOGGING_FOR_AI = 10;
 const MAX_HTTPCLIENT_FOR_AI = 10;
 
+// Type for the simplified finding structure sent to the AI
+interface SimplifiedFinding {
+    file?: string;
+    line?: number;
+    type: string;
+    severity: FindingSeverity | SecretFinding['severity'] | UploadFinding['severity'];
+    message: string;
+    details?: string;
+    packageName?: string;
+    version?: string;
+    vulnerabilities?: any[];
+}
+
+const MAX_FINDINGS_PER_TYPE = 10;
+
 /**
- * Generates AI-powered fix suggestions based on findings.
- * @param reportData Object containing scan findings.
- * @returns A string containing formatted fix suggestions, or a placeholder if AI fails.
+ * Generates AI-powered suggestions for fixing findings.
+ * @param reportData The aggregated findings.
+ * @param apiKey OpenAI API key.
+ * @returns A promise resolving to a Markdown string with suggestions.
  */
-export async function getAiFixSuggestions(reportData: ReportData): Promise<string> {
-    if (!openai) {
-        return '*AI suggestions skipped (OpenAI client not initialized or API key missing/placeholder).*';
-    }
+export async function generateAISuggestions(reportData: ReportData, apiKey: string): Promise<string> {
+    const openai = new OpenAI({ apiKey });
 
-    // Prepare a summarized version of findings for the prompt
-    const summarizedData = {
-        secrets: reportData.secretFindings
-            .slice(0, MAX_SECRETS_FOR_AI)
-            .map(f => ({ file: f.file, line: f.line, type: f.type, severity: f.severity })),
-        dependencies: reportData.dependencyFindings
-            .filter(f => f.vulnerabilities.length > 0)
-            .slice(0, MAX_DEPS_FOR_AI)
-            .map(d => ({ name: d.name, version: d.version, maxSeverity: d.maxSeverity, cveIds: d.vulnerabilities.map(v => v.id).slice(0, 3) })),
-        configuration: reportData.configFindings
-            .slice(0, MAX_CONFIG_FOR_AI)
-            .map(c => ({ file: c.file, key: c.key, value: c.value, type: c.type, severity: c.severity })),
-        uploads: reportData.uploadFindings
-            .slice(0, MAX_UPLOADS_FOR_AI)
-            .map(u => ({ file: u.file, line: u.line, type: u.type, severity: u.severity, message: u.message })),
-        endpoints: reportData.endpointFindings
-            .slice(0, MAX_ENDPOINTS_FOR_AI)
-            .map(e => ({ file: e.file, line: e.line, path: e.path, type: e.type, severity: e.severity })),
-        rateLimiting: reportData.rateLimitFindings
-            .slice(0, MAX_RATELIMIT_FOR_AI)
-            .map(r => ({ file: r.file, line: r.line, type: r.type, severity: r.severity, message: r.message })),
-        logging: reportData.errorLoggingFindings
-            .slice(0, MAX_LOGGING_FOR_AI)
-            .map(l => ({ file: l.file, line: l.line, type: l.type, severity: l.severity, message: l.message })),
-        httpClients: reportData.httpClientFindings
-            .slice(0, MAX_HTTPCLIENT_FOR_AI)
-            .map(h => ({ file: h.file, line: h.line, type: h.type, library: h.library, severity: h.severity, message: h.message }))
-    };
+    // Prepare a simplified list of findings for the prompt
+    const simplifiedFindings: SimplifiedFinding[] = [
+        ...reportData.secretFindings.slice(0, MAX_FINDINGS_PER_TYPE).map(f => ({ file: f.file, line: f.line, type: f.type, severity: f.severity, message: `Secret finding: ${f.type}` })),
+        ...reportData.dependencyFindings.slice(0, MAX_FINDINGS_PER_TYPE).map(d => ({
+            packageName: d.name,
+            version: d.version,
+            type: 'Vulnerable Dependency',
+            severity: d.maxSeverity,
+            message: `${d.vulnerabilities.length} vulnerabilities found. Highest severity: ${d.maxSeverity}. Example CVE: ${d.vulnerabilities[0]?.id || 'N/A'}`,
+            vulnerabilities: d.vulnerabilities.slice(0, 3)
+        })),
+        ...reportData.configFindings.slice(0, MAX_FINDINGS_PER_TYPE).map(c => ({ file: c.file, type: c.type, severity: c.severity, message: c.message })),
+        ...reportData.uploadFindings.slice(0, MAX_FINDINGS_PER_TYPE).map(u => ({ file: u.file, line: u.line, type: u.type, severity: u.severity, message: u.message, details: u.details })),
+        ...reportData.endpointFindings.slice(0, MAX_FINDINGS_PER_TYPE).map(e => ({ file: e.file, line: e.line, type: e.type, severity: e.severity, message: e.message, details: e.details })),
+        ...reportData.loggingFindings.slice(0, MAX_FINDINGS_PER_TYPE).map(l => ({ file: l.file, line: l.line, type: l.type, severity: l.severity, message: l.message, details: l.details })),
+        ...reportData.httpClientFindings.slice(0, MAX_FINDINGS_PER_TYPE).map(h => ({ file: h.file, line: h.line, type: h.type, severity: h.severity, message: h.message, details: h.details }))
+    ];
 
-    // Only proceed if there are actual findings to report
-    if (summarizedData.secrets.length === 0 && 
-        summarizedData.dependencies.length === 0 && 
-        summarizedData.configuration.length === 0 && 
-        summarizedData.uploads.length === 0 &&
-        summarizedData.endpoints.length === 0 &&
-        summarizedData.rateLimiting.length === 0 &&
-        summarizedData.logging.length === 0 &&
-        summarizedData.httpClients.length === 0) {
-        return '*No significant issues found requiring AI suggestions.*';
+    if (simplifiedFindings.length === 0) {
+        return "\n*AI Suggestions: No specific findings requiring actionable suggestions were identified.*\n";
     }
 
     const prompt = `
-You are a helpful security assistant integrated into a tool called VibeSafe.
-Given the following security findings (secrets, dependency vulnerabilities, configuration issues, upload handling issues, potentially exposed endpoints, potential missing rate limiting, potential unsanitized error logging, potential http client issues) from a code scan (JSON format), provide a concise, actionable list of fix suggestions in Markdown format.
-Focus on the most impactful recommendations based on severity and type.
-For upload issues, suggest adding file size limits and type filtering.
-For endpoint issues, suggest reviewing access controls (authentication/authorization) or removing the endpoint if unnecessary.
-For rate limiting issues, suggest adding a rate limiter like 'express-rate-limit' to relevant routes found in the specified file.
-For logging issues, suggest logging only specific, sanitized error information (like an error ID or message) instead of the full error object, especially in production.
-For HTTP client issues (like missing timeouts), suggest adding appropriate timeout values (e.g., \`timeout\` option for axios, \`AbortController\` with \`signal\` for fetch).
-Keep suggestions brief and practical for a developer. Prioritize high/critical issues.
-Structure the output as a numbered list.
+        Given the following security findings from the VibeSafe scanner, provide concise, actionable suggestions for fixing each one. 
+        Focus on practical code changes or configuration updates where possible. 
+        Group suggestions by finding type or file if it makes sense. Be brief.
 
-Findings:
-\`\`\`json
-${JSON.stringify(summarizedData, null, 2)}
-\`\`\`
+        Findings:
+        ${JSON.stringify(simplifiedFindings, null, 2)}
 
-Generate a numbered list of Markdown fix suggestions below:
-`;
+        Suggestions (provide in Markdown format):
+    `;
 
-    const spinner = ora('Requesting AI fix suggestions from OpenAI (gpt-4o-mini)... ').start();
     try {
         const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
+            model: "gpt-4o-mini",
             messages: [
-                { role: 'system', content: 'You are a helpful security assistant providing concise fix suggestions in Markdown format.' },
-                { role: 'user', content: prompt }
+                { role: "system", content: "You are a helpful security assistant providing fix suggestions for code vulnerabilities." },
+                { role: "user", content: prompt }
             ],
-            max_tokens: 400,
+            max_tokens: 500,
             temperature: 0.3,
-            n: 1,
-            stop: null,
         });
 
-        const suggestions = completion.choices[0]?.message?.content?.trim();
+        const suggestions = completion.choices[0]?.message?.content?.trim() || "AI failed to generate suggestions.";
 
-        if (suggestions) {
-            spinner.succeed('AI suggestions received.');
-            // Basic validation/cleanup
-            if (suggestions.startsWith('```markdown')) {
-                return suggestions.substring(10, suggestions.length - 3).trim();
-            }
-            return suggestions;
-        } else {
-            spinner.warn('AI suggestion generation failed (empty response from API).');
-            return '*AI suggestion generation failed (empty response).*';
-        }
+        return `\n## AI Suggestions\n\n${suggestions}\n`;
 
     } catch (error: any) {
-        spinner.fail('OpenAI API request failed.');
-        // Check for specific OpenAI errors if possible
-        if (error instanceof OpenAI.APIError) {
-            console.error(`Error calling OpenAI API: ${error.status} ${error.name} ${error.message}`);
-            return `*AI suggestions failed due to an API error: ${error.name} (${error.message})*`;
-        } else {
-            console.error('Error calling OpenAI API:', error.message || error);
-            return `*AI suggestions failed due to an unexpected error: ${error.message || error}*`;
-        }
+        console.error(chalk.red("Error calling OpenAI API:"), error.message);
+        return `\n## AI Suggestions\n\n*Error generating suggestions. Please check your OpenAI API key and connectivity.*\nError details: ${error.message}\n`;
     }
 }
  

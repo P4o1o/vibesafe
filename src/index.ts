@@ -14,8 +14,8 @@ import chalk from 'chalk';
 import { scanConfigFile, ConfigFinding } from './scanners/configuration';
 import { scanForUnvalidatedUploads, UploadFinding } from './scanners/uploads';
 import { scanForExposedEndpoints, EndpointFinding } from './scanners/endpoints';
-import { scanForMissingRateLimit, RateLimitFinding } from './scanners/rateLimiting';
-import { scanForImproperErrorLogging, ErrorLoggingFinding } from './scanners/logging';
+import { checkRateLimitHeuristic, RateLimitFinding } from './scanners/rateLimiting';
+import { scanForLoggingIssues, LoggingFinding } from './scanners/logging';
 import { scanForHttpClientIssues, HttpClientFinding } from './scanners/httpClient';
 
 // Define a combined finding type if needed later
@@ -80,7 +80,7 @@ program.command('scan')
     let allUploadFindings: UploadFinding[] = [];
     let allEndpointFindings: EndpointFinding[] = [];
     let allRateLimitFindings: RateLimitFinding[] = [];
-    let allErrorLoggingFindings: ErrorLoggingFinding[] = [];
+    let allLoggingFindings: LoggingFinding[] = [];
     let allHttpClientFindings: HttpClientFinding[] = [];
 
     // --- File Traversal (Phase 2.2) ---
@@ -159,38 +159,30 @@ program.command('scan')
         }
     });
 
-    // --- Rate Limit Scan (Phase 6.4) ---
-    // Use the same JS/TS files as endpoint scan for checking rate limiting context
-    console.log(`Scanning ${filesForEndpointScan.length} files for potential missing rate limiting...`);
-    filesForEndpointScan.forEach(filePath => {
-        try {
-            const content = fs.readFileSync(filePath, 'utf-8');
-            const findings = scanForMissingRateLimit(filePath, content);
-            const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
-            allRateLimitFindings = allRateLimitFindings.concat(relativeFindings);
-        } catch (error: any) {
-            // Avoid crashing if a single file fails
-            console.warn(chalk.yellow(`Could not scan ${path.relative(rootDir, filePath)} for rate limiting: ${error.message}`));
-        }
-    });
+    // --- Rate Limit Heuristic Check (Phase 6.4 - Revised) ---
+    console.log('Checking for presence of known rate limiting packages and API routes...');
+    // Pass all parsed dependencies and the files likely containing routes
+    allRateLimitFindings = checkRateLimitHeuristic(dependencyInfoList, filesForEndpointScan);
+    if (allRateLimitFindings.length > 0) {
+        console.log(chalk.yellow('Found API routes but no known rate-limiting package in dependencies. Added project-level advisory.'));
+    } else {
+        console.log('Rate limiting check passed (either known package found or no routes detected).');
+    }
 
-    // --- Error Logging Scan (Phase 6.5) ---
-    // Use the same JS/TS files as endpoint/rate-limit scan
-    console.log(`Scanning ${filesForEndpointScan.length} files for potential improper error logging...`);
+    // --- Logging Scan (Phase 6.5) ---
+    console.log(`Scanning ${filesForEndpointScan.length} files for potential logging issues...`);
     filesForEndpointScan.forEach(filePath => {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
-            const findings = scanForImproperErrorLogging(filePath, content);
+            const findings = scanForLoggingIssues(filePath, content);
             const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
-            allErrorLoggingFindings = allErrorLoggingFindings.concat(relativeFindings);
+            allLoggingFindings = allLoggingFindings.concat(relativeFindings);
         } catch (error: any) {
-            // Avoid crashing if a single file fails
             console.warn(chalk.yellow(`Could not scan ${path.relative(rootDir, filePath)} for logging issues: ${error.message}`));
         }
     });
 
     // --- HTTP Client Scan (Phase 6.4.2) ---
-    // Use the same JS/TS files as endpoint scan
     console.log(`Scanning ${filesForEndpointScan.length} files for potential HTTP client issues...`);
     filesForEndpointScan.forEach(filePath => {
         try {
@@ -234,13 +226,13 @@ program.command('scan')
 
     // Filter rate limit findings (These are 'Low' severity, so they likely won't show with --high-only)
     const reportRateLimitFindings = options.highOnly
-        ? allRateLimitFindings.filter(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium') // Will likely be empty
+        ? [] // Project-level advisory is Low severity, exclude with --high-only
         : allRateLimitFindings;
 
-    // Filter error logging findings (Low severity)
-    const reportErrorLoggingFindings = options.highOnly
-        ? allErrorLoggingFindings.filter(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium')
-        : allErrorLoggingFindings;
+    // Filter logging findings (update variable names)
+    const reportLoggingFindings = options.highOnly
+        ? allLoggingFindings.filter(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium') // Keep Medium for PII?
+        : allLoggingFindings;
 
     // Filter HTTP client findings (Low severity)
     const reportHttpClientFindings = options.highOnly
@@ -250,66 +242,66 @@ program.command('scan')
     // --- NOW Check Gitignore Status --- 
     gitignoreWarnings = checkGitignoreStatus(rootDir);
 
-    // --- Output Generation ---
-    const reportData = { 
-        secretFindings: reportSecretFindings, 
-        dependencyFindings: reportDependencyFindings, 
-        configFindings: reportConfigFindings,
-        uploadFindings: reportUploadFindings,
-        endpointFindings: reportEndpointFindings,
-        rateLimitFindings: reportRateLimitFindings,
-        errorLoggingFindings: reportErrorLoggingFindings,
-        httpClientFindings: reportHttpClientFindings
-    };
-
-    // Generate JSON if requested
-    if (options.output) {
+    // --- Report Generation (Phase 4) ---
+    if (reportPath) {
+        const reportData = {
+            secretFindings: reportSecretFindings,
+            dependencyFindings: reportDependencyFindings,
+            configFindings: reportConfigFindings,
+            uploadFindings: reportUploadFindings,
+            endpointFindings: reportEndpointFindings,
+            rateLimitFindings: reportRateLimitFindings,
+            loggingFindings: reportLoggingFindings,
+            httpClientFindings: reportHttpClientFindings,
+            gitignoreWarnings: gitignoreWarnings,
+            infoSecretFindings: infoSecretFindings
+        };
         try {
-            const outputJsonData = {
-                secrets: reportSecretFindings,
-                dependencies: reportDependencyFindings,
-                configuration: reportConfigFindings,
-                uploads: reportUploadFindings,
-                endpoints: reportEndpointFindings,
-                rateLimiting: reportRateLimitFindings,
-                errorLogging: reportErrorLoggingFindings,
-                httpClients: reportHttpClientFindings
-            }
-            fs.writeFileSync(options.output, JSON.stringify(outputJsonData, null, 2));
-            console.log(`JSON results successfully written to ${options.output}`);
-        } catch (error) {
-            console.error(`Error writing JSON output file ${options.output}:`, error);
-            // Decide if this should be fatal? Maybe not if MD report is also requested.
-        }
-    }
-
-    // Generate Markdown Report if requested
-    if (reportPath) { 
-        try {
-            // Await the async report generation
-            const markdownContent = await generateMarkdownReport(reportData); 
+            const markdownContent = await generateMarkdownReport(reportData);
             fs.writeFileSync(reportPath, markdownContent);
-            console.log(`Markdown report successfully written to ${reportPath}`);
-        } catch (error) {
-             console.error(`Error writing Markdown report file ${reportPath}:`, error);
+            console.log(chalk.green(`\nMarkdown report generated successfully at ${reportPath}`));
+        } catch (error: any) {
+            console.error(chalk.red(`\nFailed to generate Markdown report: ${error.message}`));
+            process.exit(1);
         }
     }
 
-    // Print to console ONLY if neither JSON nor Markdown output was specified
-    if (!options.output && !reportPath) {
-        
-        // Print Configuration Warnings FIRST (after scans, before results)
+    // --- JSON Output --- 
+    if (options.output) {
+        const jsonData = {
+            secrets: reportSecretFindings,
+            dependencies: reportDependencyFindings,
+            configuration: reportConfigFindings,
+            uploads: reportUploadFindings,
+            endpoints: reportEndpointFindings,
+            rateLimiting: reportRateLimitFindings,
+            logging: allLoggingFindings, // Use the full list here
+            httpClients: reportHttpClientFindings,
+            info: infoSecretFindings,
+            gitignoreWarnings: gitignoreWarnings,
+        };
+        try {
+            fs.writeFileSync(options.output, JSON.stringify(jsonData, null, 2));
+            console.log(chalk.green(`\nJSON output written successfully to ${options.output}`));
+        } catch (error: any) {
+            console.error(chalk.red(`\nFailed to write JSON output: ${error.message}`));
+        }
+    }
+    
+    // --- Console Output (Phase 5.1) ---
+    const suppressConsole = !!reportPath || !!options.output;
+
+    if (!suppressConsole) {
+        // Gitignore Warnings
         if (gitignoreWarnings.length > 0) {
-            console.log(chalk.yellow.bold('\n⚠️ Configuration Warnings:')); // Added emoji
+            console.log(chalk.yellow.bold('\n⚠️ Configuration Warnings:'));
             gitignoreWarnings.forEach(warning => {
-                const emoji = warning.type === 'MISSING' ? '❓' : '❗'; // Different emojis
-                console.log(chalk.yellow(`  ${emoji} ${warning.message}`));
+                console.log(`  ❓ ${warning.message}`);
             });
         }
-
-        // Handle Info findings first
+        // Info Secrets (.env)
         if (infoSecretFindings.length > 0) {
-            console.log(chalk.blue.bold('\nInfo:'));
+            console.log(chalk.cyan.bold('\nInfo:'));
             // Get unique .env files found
             const envFiles = [...new Set(infoSecretFindings.map(f => f.file))];
             envFiles.forEach(file => {
@@ -317,161 +309,238 @@ program.command('scan')
             });
         }
 
-        // Check if any standard findings exist (including config)
-        const hasStandardSecrets = reportSecretFindings.length > 0;
-        const hasDependencyIssues = reportDependencyFindings.length > 0;
-        const hasConfigIssues = reportConfigFindings.length > 0;
-        const hasUploadIssues = reportUploadFindings.length > 0;
-        const hasEndpointIssues = reportEndpointFindings.length > 0;
-        const hasRateLimitIssues = reportRateLimitFindings.length > 0;
-        const hasErrorLoggingIssues = reportErrorLoggingFindings.length > 0;
-        const hasHttpClientIssues = reportHttpClientFindings.length > 0;
+        // Combine all reportable (filtered) findings
+        const allReportFindings = [
+            ...reportSecretFindings,
+            ...reportDependencyFindings,
+            ...reportConfigFindings,
+            ...reportUploadFindings,
+            ...reportEndpointFindings,
+            ...reportRateLimitFindings,
+            ...reportLoggingFindings, 
+            ...reportHttpClientFindings
+        ];
 
-        if (hasStandardSecrets || hasDependencyIssues || hasConfigIssues || hasUploadIssues || hasEndpointIssues || hasRateLimitIssues || hasErrorLoggingIssues || hasHttpClientIssues) {
-            // Print standard secrets to console if found
-            if (hasStandardSecrets) {
-                console.log(chalk.bold('\nPotential Secrets Found:'));
-                reportSecretFindings.forEach(finding => {
-                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
-                });
-            }
+        if (allReportFindings.length > 0) {
+            const severityOrder = severityToSortOrder; 
+            const sortedFindings = allReportFindings.sort((a: any, b: any) => {
+                const severityDiff = severityOrder(a.severity) - severityOrder(b.severity);
+                if (severityDiff !== 0) return severityDiff;
+                // Ensure 'file' property exists for sorting
+                const fileA = a.file || (a.packageName ? `${a.packageName}@${a.version}` : 'N/A');
+                const fileB = b.file || (b.packageName ? `${b.packageName}@${b.version}` : 'N/A');
+                return fileA.localeCompare(fileB);
+            });
 
-            // Print dependency findings to console if found
-            if (hasDependencyIssues) {
-                console.log(chalk.bold('\nDependencies with Issues Found:'));
-                reportDependencyFindings.sort((a, b) => severityToSortOrder(b.maxSeverity) - severityToSortOrder(a.maxSeverity));
-                reportDependencyFindings.forEach(dep => {
-                    if (dep.error) {
-                        console.log(`  - [${chalk.red.bold('ERROR')}] ${chalk.magenta(dep.name)}@${chalk.gray(dep.version)}: (${dep.error})`);
-                    } else if (dep.vulnerabilities.length > 0) {
-                        const cveIds = dep.vulnerabilities.map(v => v.id).slice(0,3).join(', ');
-                        const moreCvEs = dep.vulnerabilities.length > 3 ? '...' : '';
-                        // Apply color to severity and dependency name/version
-                        console.log(`  - [${colorSeverity(dep.maxSeverity)}] ${chalk.magenta(dep.name)}@${chalk.gray(dep.version)}: ${dep.vulnerabilities.length} vulnerabilities (${chalk.dim(cveIds)}${moreCvEs})`);
-                    }
-                });
-            }
+            const groupedFindings: { [key: string]: any[] } = {};
+            sortedFindings.forEach((f: any) => { 
+                 // ---- TEMPORARY DEBUG LOG (Removed for now) ----
+                 // console.log('DEBUG Finding:', JSON.stringify(f)); 
+                 // ---------------------------
+                 
+                let typeKey = 'Other Issues Found'; // Default key (Renamed)
+                
+                // ---- Grouping Logic v4.1 ----
+                if (f.type === 'Potential Unsanitized Error Logging' || f.type === 'Potential PII Logging') {
+                    typeKey = 'Potential Logging Issues Found';
+                // Ensure exact match for Rate Limit type string from its scanner
+                // } else if (f.type === 'Project-Level Rate Limit Advisory') { 
+                //     typeKey = 'Project-Level Rate Limit Advisory Found';
+                // Use 'name' property for dependencies
+                } else if ('name' in f && 'version' in f && 'packageManager' in f) {
+                    typeKey = 'Dependencies with Issues Found';
+                } else if ('pattern' in f && f.severity !== 'Info') {
+                    typeKey = 'Potential Secrets Found';
+                } else if (f.type === 'Potential Missing Timeout' && 'library' in f) {
+                    typeKey = 'Potential HTTP Client Issues Found';
+                 } else if (f.type === 'Potentially Exposed Debug/Admin Endpoint' || 'path' in f) {
+                    typeKey = 'Potentially Exposed Endpoints Found';
+                } else if (f.type === 'Missing Upload Size Limit' || f.type === 'Missing Upload File Filter' || f.type === 'Generic File Upload Pattern' || 'patternType' in f) {
+                    typeKey = 'Potential Upload Issues Found';
+                } else if (f.type === 'Permissive CORS' || f.type === 'Insecure Setting' || 'key' in f) {
+                    typeKey = 'Configuration Issues Found';
+                }
 
-            // Print config findings to console if found
-            if (hasConfigIssues) {
-                console.log(chalk.bold('\nConfiguration Issues Found:'));
-                reportConfigFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity));
-                reportConfigFindings.forEach(finding => {
-                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type}: ${chalk.cyan(finding.file)} - Key: ${chalk.magenta(finding.key)}, Value: ${chalk.yellow(JSON.stringify(finding.value))}`);
-                    console.log(chalk.dim(`    > ${finding.message}`));
-                });
-            }
+                if (!groupedFindings[typeKey]) groupedFindings[typeKey] = [];
+                if (!(typeKey === 'Potential Secrets Found' && f.severity === 'Info')) {
+                     groupedFindings[typeKey].push(f);
+                }
+            });
 
-            // Print upload findings to console if found
-            if (hasUploadIssues) {
-                console.log(chalk.bold('\nPotential Upload Issues Found:'));
-                reportUploadFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity));
-                reportUploadFindings.forEach(finding => {
-                    // Customize console output for upload findings
-                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
-                    console.log(chalk.dim(`    > ${finding.message}`));
-                    if (finding.details) {
-                         console.log(chalk.dim(`      ${finding.details}`));
-                    }
-                });
-            }
+            // Define the desired order of sections (keep Other as last)
+            const sectionOrder = [
+                'Potential Secrets Found',
+                'Dependencies with Issues Found',
+                'Configuration Issues Found',
+                'Potential Upload Issues Found',
+                'Potentially Exposed Endpoints Found',
+                // 'Project-Level Rate Limit Advisory Found', // Removed section title
+                'Potential Logging Issues Found',
+                'Potential HTTP Client Issues Found',
+                'Other Issues Found' // Renamed
+            ];
 
-            // Print endpoint findings to console if found
-            if (hasEndpointIssues) {
-                console.log(chalk.bold('\nPotentially Exposed Endpoints Found:'));
-                reportEndpointFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity));
-                reportEndpointFindings.forEach(finding => {
-                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
-                    console.log(chalk.dim(`    > Path: ${chalk.magenta(finding.path)} - ${finding.message}`));
-                    if (finding.details) {
-                         console.log(chalk.dim(`      Context: ${finding.details}`));
-                    }
-                });
-            }
-
-            // Print rate limit findings to console if found
-            if (hasRateLimitIssues) {
-                console.log(chalk.bold('\nPotential Rate Limiting Issues Found:'));
-                // Since findings are per-file, group them or just list them
-                reportRateLimitFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity)); // Although all are Low for now
-                reportRateLimitFindings.forEach(finding => {
-                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)} (around line ${chalk.yellow(String(finding.line))})`);
-                    console.log(chalk.dim(`    > ${finding.message}`));
-                    if (finding.details) {
-                         console.log(chalk.dim(`      ${finding.details}`));
-                    }
-                });
-            }
-
-            // Print error logging findings to console if found
-            if (hasErrorLoggingIssues) {
-                console.log(chalk.bold('\nPotential Unsanitized Error Logging Found:'));
-                reportErrorLoggingFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity)); // Although all are Low
-                reportErrorLoggingFindings.forEach(finding => {
-                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
-                    console.log(chalk.dim(`    > ${finding.message}`));
-                    if (finding.details) {
-                         console.log(chalk.dim(`      ${finding.details}`));
-                    }
-                });
-            }
-
-            // Print http client findings to console if found
-            if (hasHttpClientIssues) {
-                console.log(chalk.bold('\nPotential HTTP Client Issues Found:'));
-                reportHttpClientFindings.sort((a,b) => severityToSortOrder(b.severity) - severityToSortOrder(a.severity)); // Although all are Low
-                reportHttpClientFindings.forEach(finding => {
-                    console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} (${finding.library}) in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
-                    console.log(chalk.dim(`    > ${finding.message}`));
-                    if (finding.details) {
-                         console.log(chalk.dim(`      ${finding.details}`));
-                    }
-                });
-            }
+            // Print findings grouped by type
+            sectionOrder.forEach(sectionTitle => {
+                if (groupedFindings[sectionTitle] && groupedFindings[sectionTitle].length > 0) {
+                    console.log(chalk.bold(`\n${sectionTitle}:`));
+                    groupedFindings[sectionTitle].forEach(finding => {
+                        // ---- Revised Print Logic (Matching Grouping Order) ----
+                        if (finding.type === 'Potential Unsanitized Error Logging' || finding.type === 'Potential PII Logging') {
+                            // Add file/line for PII, keep simpler format for generic error logging
+                            if (finding.type === 'Potential PII Logging') {
+                                console.log(`  - [${colorSeverity(finding.severity)}] ${finding.message} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`); 
+                            } else { // Potential Unsanitized Error Logging
+                                // Now also include file/line for unsanitized error logging
+                                console.log(`  - [${colorSeverity(finding.severity)}] ${finding.message} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`); 
+                            }
+                            console.log(chalk.dim(`    > ${finding.details}`)); 
+                        } else if ('name' in finding && 'version' in finding && 'packageManager' in finding) { 
+                            const issues = finding.vulnerabilities?.length > 0 
+                                ? `${finding.vulnerabilities.length} vulnerabilities (${finding.vulnerabilities.map((v: any) => v.id).slice(0, 3).join(', ')}...)`
+                                : finding.error || 'No known vulnerabilities or error checking OSV';
+                             const depSeverity = finding.maxSeverity || (finding.error ? 'Medium' : 'None'); 
+                            console.log(`  - [${colorSeverity(depSeverity)}] ${chalk.magenta(finding.name)}@${chalk.gray(finding.version)}: ${issues}`);
+                        } else if ('pattern' in finding) { // Secrets 
+                             console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
+                         } else if (finding.type === 'Potential Missing Timeout' && 'library' in finding) { 
+                            console.log(`  - [${colorSeverity(finding.severity)}] ${finding.type} (${finding.library}) in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
+                            console.log(chalk.dim(`    > ${finding.message}`));
+                             if (finding.details) {
+                                 console.log(chalk.dim(`      ${finding.details}`));
+                             }
+                        } else if (finding.type === 'Potentially Exposed Debug/Admin Endpoint' || 'path' in finding) { 
+                            console.log(`  - [${colorSeverity(finding.severity)}] ${finding.message} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
+                            console.log(chalk.dim(`    > Path: ${chalk.magenta(finding.path)} - ${finding.details}`));
+                        } else if (finding.type === 'Missing Upload Size Limit' || finding.type === 'Missing Upload File Filter' || finding.type === 'Generic File Upload Pattern' || 'patternType' in finding) { 
+                            console.log(`  - [${colorSeverity(finding.severity)}] ${finding.message} in ${chalk.cyan(finding.file)}:${chalk.yellow(String(finding.line))}`);
+                            console.log(chalk.dim(`    > ${finding.details}`));
+                        } else if (finding.type === 'Permissive CORS' || finding.type === 'Insecure Setting' || 'key' in finding) { 
+                            console.log(`  - [${colorSeverity(finding.severity)}] ${finding.description || finding.type}: ${chalk.cyan(finding.file)} - Key: ${chalk.magenta(finding.key)}, Value: ${chalk.yellow(JSON.stringify(finding.value))}`);
+                            console.log(chalk.dim(`    > ${finding.message}`));
+                        } else { // Fallback for Other Issues Found
+                            // Special handling for our Project-Level Rate Limit Advisory
+                            if (finding.type === 'Project-Level Rate Limit Advisory') {
+                                console.log(`  - [${colorSeverity(finding.severity)}] ${finding.message}`);
+                                console.log(chalk.dim(`    > Suggestion: ${finding.details}`)); 
+                            } else {
+                                // Generic fallback formatting for truly other/unknown issues
+                                const severity = finding.severity || 'Unknown';
+                                const message = finding.message || 'No message available';
+                                const file = finding.file || 'N/A';
+                                const line = finding.line ? `:${chalk.yellow(String(finding.line))}` : '';
+                                const type = finding.type ? `(${finding.type}) ` : '';
+                                console.log(`  - [${colorSeverity(severity)}] ${type}Issue detected in ${chalk.cyan(file)}${line}`);
+                                console.log(chalk.dim(`    > ${message}`));
+                                // Optionally add details if present
+                                if (finding.details) {
+                                    console.log(chalk.dim(`    > Details: ${finding.details}`));
+                                }
+                            }
+                        }
+                    });
+                }
+            });
         } else {
             // All Clear! Print positive message.
-            // Check if we actually scanned for dependencies before saying no vulns found
-            const scannedDeps = dependencyInfoList.length > 0;
-            console.log(chalk.green.bold('\n✅ No issues found! Keep up the good vibes! 😎'));
-            // Optionally add context:
-            if (!scannedDeps) {
-                 console.log(chalk.gray('  (Dependency vulnerability scan skipped as no supported package manager was detected)'));
-            }
+            console.log(chalk.green.bold('\n✅ No significant issues found! Keep up the good vibes! 😎'));
+        }
+
+    } else {
+        // Combine ALL findings (before filtering) to check if *any* exist
+        const anyFindingsExist = 
+            allSecretFindings.length > 0 || 
+            allDependencyFindings.length > 0 || 
+            allConfigFindings.length > 0 || 
+            allUploadFindings.length > 0 || 
+            allEndpointFindings.length > 0 || 
+            allRateLimitFindings.length > 0 || 
+            allLoggingFindings.length > 0 || 
+            allHttpClientFindings.length > 0;
+
+        // Message indicating suppression only if findings exist
+        if (anyFindingsExist) {
+             console.log(chalk.dim('\n(Console output suppressed due to report/output file generation.)'));
         }
     }
+    
+    // --- Exit Code (Phase 1.2 / 5.2) ---
+    const hasHighSeverityIssue = 
+        reportSecretFindings.some(f => f.severity === 'High' || f.severity === 'Critical') ||
+        reportDependencyFindings.some(dep => dep.maxSeverity === 'High' || dep.maxSeverity === 'Critical') ||
+        reportConfigFindings.some(f => f.severity === 'High' || f.severity === 'Critical') ||
+        reportUploadFindings.some(f => f.severity === 'High' || f.severity === 'Critical') || 
+        reportEndpointFindings.some(f => f.severity === 'High' || f.severity === 'Critical') || 
+        // Use the correct filtered list name here
+        reportLoggingFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium'); // Consider Medium PII? 
+        // Note: RateLimit, HTTPClient currently don't have High/Critical that affect exit code
+        
 
-    console.log('\nScan complete.');
+    // --- Final Summary --- 
+    console.log(chalk.bold('\n--- Scan Summary ---'));
+    const summaryPoints = [
+        { emoji: '🔑', label: 'Secrets', count: reportSecretFindings.length },
+        { emoji: '📦', label: 'Dependencies', count: reportDependencyFindings.length },
+        { emoji: '⚙️', label: 'Configuration', count: reportConfigFindings.length },
+        { emoji: '⬆️', label: 'Uploads', count: reportUploadFindings.length },
+        { emoji: '🔌', label: 'Endpoints', count: reportEndpointFindings.length },
+        { emoji: '📝', label: 'Logging', count: reportLoggingFindings.length }, 
+        { emoji: '🌐', label: 'HTTP Clients', count: reportHttpClientFindings.length },
+        { emoji: '⏳', label: 'Rate Limit Advisory', count: reportRateLimitFindings.length }, // Will be 0 or 1
+        { emoji: '💡', label: 'Info (.env)', count: infoSecretFindings.length },
+        { emoji: '⚠️', label: 'Config Warnings', count: gitignoreWarnings.length },
+    ];
 
-    // Exit code logic (Phase 1.2 / 3.4)
-    // Info findings should NOT affect exit code
-    const highSeveritySecrets = reportSecretFindings.some(f => f.severity === 'High');
-    const highSeverityDeps = reportDependencyFindings.some(d => d.maxSeverity === 'High' || d.maxSeverity === 'Critical');
-    const highSeverityConfig = reportConfigFindings.some(f => f.severity === 'High' || f.severity === 'Critical');
-    const highSeverityUploads = reportUploadFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium');
-    const highSeverityEndpoints = reportEndpointFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium');
-    // Rate limit findings are currently Low, so they won't trigger exit code 1 with --high-only
-    // const highSeverityRateLimit = reportRateLimitFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium');
-    // Error logging findings are Low, so they won't trigger exit code 1 with --high-only
-    // const highSeverityErrorLogging = reportErrorLoggingFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium');
-    // HTTP Client findings are Low, so they won't trigger exit code 1 with --high-only
-    // const highSeverityHttpClient = reportHttpClientFindings.some(f => f.severity === 'High' || f.severity === 'Critical' || f.severity === 'Medium');
+    // Calculate padding for alignment
+    let maxLabelWidth = 0;
+    summaryPoints.forEach(point => {
+        if (point.count > 0) {
+            const labelWidth = point.label.length; // Emoji width can vary, focus on label
+            if (labelWidth > maxLabelWidth) {
+                maxLabelWidth = labelWidth;
+            }
+        }
+    });
+    const firstColWidth = maxLabelWidth + 4; // emoji + space + label + space buffer
 
-    if (options.highOnly && (highSeveritySecrets || highSeverityDeps || highSeverityConfig || highSeverityUploads || highSeverityEndpoints /*|| highSeverityRateLimit || highSeverityErrorLogging || highSeverityHttpClient*/)) {
-        console.log('Exiting with code 1 due to High/Critical severity findings (--high-only specified).');
-        process.exit(1);
+    summaryPoints.forEach(point => {
+        if (point.count > 0) {
+            const labelPart = `${point.emoji} ${point.label}`;
+            console.log(`  ${labelPart.padEnd(firstColWidth)} ${chalk.yellow(point.count)}`);
+        } else {
+            // Optionally hide sections with 0 findings, or show them dimmed
+            // console.log(chalk.dim(`  ${point.emoji} ${point.label}: 0`));
+        }
+    });
+
+    const totalReported = summaryPoints.reduce((sum, point) => sum + point.count, 0);
+    if (totalReported > 0) {
+        console.log(chalk.cyan('\nPlease scroll up to review the detailed findings.'));
+    } else if (!suppressConsole) {
+        // If no findings were reported and console wasn't suppressed, reiterate the all-clear message
+        console.log(chalk.green.bold('✅ No issues found in the scan.'));
     }
+
+    if (options.highOnly && hasHighSeverityIssue) {
+        console.log(chalk.red.bold('\nScan complete. High severity issues found. Exiting with code 1.'));
+        process.exit(1);
+    } else {
+        console.log('\nScan complete.');
+        process.exit(0);
+    }
+
   });
 
 // Helper for sorting console output - Add Info level
-function severityToSortOrder(severity: FindingSeverity | SecretFinding['severity']): number {
+function severityToSortOrder(severity: FindingSeverity | SecretFinding['severity'] | UploadFinding['severity'] | LoggingFinding['severity'] | EndpointFinding['severity'] | RateLimitFinding['severity'] | HttpClientFinding['severity']): number {
     switch (severity) {
-        case 'Critical': return 5;
-        case 'High': return 4;
-        case 'Medium': return 3;
-        case 'Low': return 2;
-        case 'Info': return 1; // Info is below Low
-        case 'None': return 0;
-        default: return 0;
+        case 'Critical': return 0;
+        case 'High': return 1;
+        case 'Medium': return 2;
+        case 'Low': return 3;
+        case 'None': return 4;
+        case 'Info': return 5;
+        default: return 6;
     }
 }
 

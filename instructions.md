@@ -99,14 +99,14 @@
 3. **Exposed Debug/Admin Endpoints**  
    - [x] Search for routes named `/debug`, `/admin`, `/status`, `/info`, etc. using framework patterns or string literals
    - [ ] Flag those without authentication or middleware checks // (Future enhancement - complex)
-4. **Lack of Rate‑Limiting**  
+4. **Lack of Rate‑Limiting / HTTP Client Issues**
    - [x] Identify files with route definitions but missing `express-rate-limit` import (heuristic)
-   - [ ] Flag missing throttle/retry settings in HTTP client code
-   - [x] Detect missing timeout/cancellation in HTTP client calls (axios, fetch, got, request) // (Superagent check disabled due to AST complexity)
+   - [x] Detect missing timeout/cancellation in HTTP client calls (axios, fetch, got, request) // (Superagent check disabled)
    - [ ] *TODO: Implement reliable `superagent` timeout detection via AST*
+   - [ ] *TODO: Flag missing retry settings in HTTP client code (e.g., check `got` for missing `retry` config; research robust checks for axios/fetch/others)*
 5. **Insufficient Logging & Error Sanitization**  
    - [x] Find logging of full error objects or stack traces (e.g., `console.error(err)`)
-   - [ ] Detect logging of PII or sensitive data in plain text // (Future enhancement - complex)
+   - [x] Detect logging of potential PII (keywords like password, email, token, etc.)
 
 ## 6. Risks & Mitigations
 

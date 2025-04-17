@@ -53,4 +53,38 @@ function yetAnotherFunction() {
 anotherFunction();
 yetAnotherFunction();
 
+// --- Test cases for PII logging --- 
+function processUserData(user) {
+    try {
+        console.log(`Processing user: ${user.id}`); // Safe
+        
+        // Potentially unsafe logging
+        console.log('User data:', user); // Logging the whole user object
+        logger.info('User details', { email: user.email, name: user.name }); // Logging PII
+        console.debug('User session token:', user.sessionToken); // Logging sensitive token
+        console.warn("Auth credentials for user:", user.credentials); // Logging credentials
+        
+        // Safe logging
+        logger.info('Processed user ID:', user.id); 
+        console.log('User processing complete for ID', user.id);
+
+        if (!user.email) throw new Error('User email missing');
+
+    } catch (error) {
+        // Logging error is handled above, but PII check might still trigger here if error contains PII
+        console.error('Error processing user:', error);
+    }
+}
+
+const sampleUser = {
+    id: 'user123',
+    name: 'Test User',
+    email: 'test.user@example.com',
+    password: 'supersecretpassword', // Example field
+    sessionToken: 'abc123xyz789token', // Example field
+    credentials: { apiKey: 'cred_1234567890abcdef' } // Example field
+};
+
+processUserData(sampleUser);
+
 app.listen(3007, () => console.log('Logging test server running')); 
