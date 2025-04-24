@@ -1,0 +1,16 @@
+{
+  "name": "test-frontend-react",
+  "version": "1.0.0",
+  "description": "Minimal React app for testing VibeSafe frontend detection",
+  "main": "index.js",
+  "scripts": {
+    "start": "echo \"No start script needed\""
+  },
+  "dependencies": {
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+} 

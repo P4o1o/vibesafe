@@ -25,9 +25,15 @@ const SENSITIVE_DATA_REGEX = /password|email|token|ssn|secret|key|credential/i; 
  * - Logging potentially sensitive data (PII).
  * @param filePath Absolute path to the file.
  * @param content The content of the file.
+ * @param hasBackend Indicates whether the file is part of a backend framework.
  * @returns An array of LoggingFinding objects.
  */
-export function scanForLoggingIssues(filePath: string, content: string): LoggingFinding[] {
+export function scanForLoggingIssues(filePath: string, content: string, hasBackend: boolean): LoggingFinding[] {
+    // If no backend framework detected, assume logging is not server-side relevant
+    if (!hasBackend) {
+        return [];
+    }
+
     const findings: LoggingFinding[] = [];
     try {
         const ast = parse(content, { loc: true, range: true, comment: false }); 
@@ -93,21 +99,26 @@ export function scanForLoggingIssues(filePath: string, content: string): Logging
 
                             if (piiMatch) {
                                 const matchedKeyword = piiMatch[0]; // Get the specific keyword matched
-                                // Avoid duplicate PII findings for the same line and *roughly* same argument text snippet
-                                const snippetPreview = argText.substring(0, 100).trim();
-                                if (!findings.some(f => f.file === filePath && 
-                                                       f.line === line && 
-                                                       f.type === 'Potential PII Logging' &&
-                                                       f.snippet?.startsWith(snippetPreview))) 
+                                
+                                // ---- Refined De-duplication ----
+                                // Check if a PII finding already exists for this specific line
+                                const piiFindingExistsForLine = findings.some(f => 
+                                    f.file === filePath && 
+                                    f.line === line && 
+                                    f.type === 'Potential PII Logging'
+                                );
+
+                                if (!piiFindingExistsForLine) 
                                 {
+                                    const snippetPreview = argText.substring(0, 100).trim();
                                     findings.push({
                                         file: filePath,
                                         line: line,
                                         type: 'Potential PII Logging',
                                         severity: 'Medium', // PII leaks are generally more sensitive
-                                        message: `Potential logging of sensitive data (matched keyword: '${matchedKeyword}').`,
-                                        details: `Found potential PII in argument ${index + 1} of ${loggerObjectName}.${loggerMethodName} call near line ${line}. Snippet: ${snippetPreview}${argText.length > 100 ? '...' : ''}`,
-                                        snippet: argText.substring(0, 200) // Store the argument text
+                                        message: `Potential logging of sensitive data (e.g., keyword '${matchedKeyword}'). Review log call.`, // Generalized message
+                                        details: `Found potential PII in log call near line ${line}. First match in argument ${index + 1} ('${matchedKeyword}'): ${snippetPreview}${argText.length > 100 ? '...' : ''}`,
+                                        snippet: argText.substring(0, 200) // Store the argument text of the first match found
                                     });
                                 }
                             }
@@ -116,6 +127,44 @@ export function scanForLoggingIssues(filePath: string, content: string): Logging
                 }
                 // Future: Could potentially check if node.callee.object is itself a CallExpression
                 // returning a logger instance, but that adds complexity.
+            }
+            
+            // --- Check 3: .catch(console.error) pattern --- 
+            if (node.type === TSESTree.AST_NODE_TYPES.CallExpression &&
+                node.callee.type === TSESTree.AST_NODE_TYPES.MemberExpression &&
+                node.callee.property.type === TSESTree.AST_NODE_TYPES.Identifier &&
+                node.callee.property.name === 'catch' && // Looking for .catch()
+                node.arguments.length === 1) // Needs one argument (the handler)
+            {
+                const catchArg = node.arguments[0];
+                let isConsoleErrorHandler = false;
+
+                // Check if the argument is console.error
+                if (catchArg.type === TSESTree.AST_NODE_TYPES.MemberExpression &&
+                    catchArg.object.type === TSESTree.AST_NODE_TYPES.Identifier &&
+                    catchArg.object.name === 'console' &&
+                    catchArg.property.type === TSESTree.AST_NODE_TYPES.Identifier &&
+                    catchArg.property.name === 'error') // Specifically console.error
+                {
+                    isConsoleErrorHandler = true;
+                }
+
+                if (isConsoleErrorHandler) {
+                    const line = node.loc.start.line;
+                    const fullCallText = content.substring(node.range[0], node.range[1]);
+                    // Avoid duplicate findings for the same line
+                    if (!findings.some(f => f.file === filePath && f.line === line && f.type === 'Potential Unsanitized Error Logging')) {
+                        findings.push({
+                            file: filePath,
+                            line: line,
+                            type: 'Potential Unsanitized Error Logging',
+                            severity: 'Low',
+                            message: `Potential logging of unsanitized error via .catch(console.error).`,
+                            details: `Found pattern: ${fullCallText.substring(0, 100)}${fullCallText.length > 100 ? '...' : ''}`,
+                            snippet: fullCallText.substring(0, 200) // Add snippet for context
+                        });
+                    }
+                }
             }
 
             // Recursively visit children

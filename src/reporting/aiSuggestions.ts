@@ -7,9 +7,9 @@ import { EndpointFinding } from '../scanners/endpoints';
 import { RateLimitFinding } from '../scanners/rateLimiting';
 import { LoggingFinding } from '../scanners/logging';
 import { HttpClientFinding } from '../scanners/httpClient';
-import ora from 'ora';
-import { GitignoreWarning } from '../utils/fileTraversal';
 import chalk from 'chalk';
+import { GitignoreWarning } from '../utils/fileTraversal';
+
 
 // Initialize OpenAI client
 // The constructor automatically looks for process.env.OPENAI_API_KEY
@@ -108,7 +108,7 @@ export async function generateAISuggestions(reportData: ReportData, apiKey: stri
 
     try {
         const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: "gpt-4.1-nano",
             messages: [
                 { role: "system", content: "You are a helpful security assistant providing fix suggestions for code vulnerabilities." },
                 { role: "user", content: prompt }

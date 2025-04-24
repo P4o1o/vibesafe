@@ -21,21 +21,27 @@ const KNOWN_RATE_LIMIT_PACKAGES = new Set([
     // Add other relevant package names here
 ]);
 
-// Regex to find common route definitions (Express-like)
-// Looks for .get, .post, .put, .delete, .patch, .all, .use followed by ('/...')
-const ROUTE_DEFINITION_REGEX = /(\.get|\.post|\.put|\.delete|\.patch|\.all|\.use)\s*\(\s*['"]\/[\w\-\/\:]*['"]/i; // Removed global flag, we only need one match
+// Regex to find common route definitions (e.g., .get('/path'))
+const ROUTE_DEFINITION_REGEX = /(\.get|\.post|\.put|\.delete|\.patch|\.all|\.use)\s*\(\s*['"]\/[\w\-\/\:]*['"]/i;
+// Regex for conventional API directories (Next.js, etc.) - case insensitive
+const CONVENTIONAL_API_DIR_REGEX = /[\/](pages[\/]api|app[\/]api)[\/]/i;
 
 // Removed RATE_LIMIT_IMPORT_REGEX as we now check package.json
 
 /**
- * Checks if known rate-limiting packages are present in dependencies
- * and if any routes are defined in the specified files.
- * Issues a single project-level warning if routes exist but no known package is found.
- * @param dependencies Array of DependencyInfo objects from parsed package files.
+ * Checks if known rate-limiting packages are present and if any API routes likely exist.
+ * Issues a project-level warning if routes exist but no known package is found.
+ * @param dependencies Array of DependencyInfo objects.
  * @param filesToScan Array of file paths (absolute) to check for route definitions.
+ * @param detectedTech Object indicating detected technologies (e.g., { hasBackend: true }).
  * @returns An array containing at most one RateLimitFinding object.
  */
-export function checkRateLimitHeuristic(dependencies: DependencyInfo[], filesToScan: string[]): RateLimitFinding[] {
+export function checkRateLimitHeuristic(dependencies: DependencyInfo[], filesToScan: string[], detectedTech: Record<string, boolean>): RateLimitFinding[] {
+    // If no backend framework detected, this heuristic isn't relevant
+    if (!detectedTech.hasBackend) {
+        return [];
+    }
+
     // Check if any dependency matches the known rate limit packages
     const hasKnownRateLimitPackage = dependencies.some(dep => 
         KNOWN_RATE_LIMIT_PACKAGES.has(dep.name)
@@ -49,18 +55,22 @@ export function checkRateLimitHeuristic(dependencies: DependencyInfo[], filesToS
     // No known package found, now check if any routes exist in the codebase
     let routesExist = false;
     for (const filePath of filesToScan) {
+        // Check 1: Conventional API directory structure (e.g., Next.js)
+        if (CONVENTIONAL_API_DIR_REGEX.test(filePath)) {
+            routesExist = true;
+            break; // Found routes via directory structure
+        }
+
+        // Check 2: Regex for common route definitions in file content
         try {
-            // Optimization: Limit read size? For now, read full file.
-            // Small files are common for routes.
             const content = fs.readFileSync(filePath, 'utf-8');
             ROUTE_DEFINITION_REGEX.lastIndex = 0; // Reset regex state
             if (ROUTE_DEFINITION_REGEX.test(content)) {
                 routesExist = true;
-                break; // Found routes in one file, no need to check others
+                break; // Found routes via content regex
             }
         } catch (error: any) {
-            // Log warning or ignore? Ignoring for now to avoid console noise.
-            // console.warn(`Could not read file ${filePath} for rate limit check: ${error.message}`);
+            // Ignore read errors
         }
     }
 

@@ -59,9 +59,15 @@ function detectUploadLibraries(content: string): string[] {
  * Includes checks for specific libraries and generic patterns.
  * @param filePath Absolute path to the file.
  * @param content The content of the file.
+ * @param hasBackend Indicates whether the file is part of a backend framework.
  * @returns An array of UploadFinding objects.
  */
-export function scanForUnvalidatedUploads(filePath: string, content: string): UploadFinding[] {
+export function scanForUnvalidatedUploads(filePath: string, content: string, hasBackend: boolean): UploadFinding[] {
+    // If no backend framework detected, skip this scan as validation happens server-side
+    if (!hasBackend) {
+        return [];
+    }
+
     let findings: UploadFinding[] = [];
     const lines = content.split('\n');
     const detectedLibraries = detectUploadLibraries(content);

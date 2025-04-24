@@ -18,9 +18,15 @@ export interface HttpClientFinding {
  * TODO: Implement retry logic checks.
  * @param filePath Absolute path to the file.
  * @param content The content of the file.
+ * @param hasBackend Indicates whether the file is likely a backend context.
  * @returns An array of HttpClientFinding objects.
  */
-export function scanForHttpClientIssues(filePath: string, content: string): HttpClientFinding[] {
+export function scanForHttpClientIssues(filePath: string, content: string, hasBackend: boolean): HttpClientFinding[] {
+    // Skip if not likely a backend context
+    if (!hasBackend) {
+        return [];
+    }
+
     const findings: HttpClientFinding[] = [];
     try {
         const ast = parse(content, { loc: true, range: true, comment: false }); // loc: true gives line/column numbers

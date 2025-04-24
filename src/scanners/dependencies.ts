@@ -260,6 +260,12 @@ export function parseDependencies(detectedFiles: { [key in PackageManager]?: { m
     // Flag to ensure we only parse node deps once
     let nodeDepsParsed = false;
 
+    // TODO: Implement package-lock.json (and yarn.lock, pnpm-lock.yaml) parsing.
+    // - If a lock file is detected (detectedFiles[manager].lock), prioritize parsing it 
+    //   to get exact installed versions and transitive dependencies.
+    // - Pass the resulting DependencyInfo list (with exact versions) to lookupCves.
+    // - Fall back to parsing the manifest file (e.g., package.json) only if no lock file exists.
+
     for (const manager in detectedFiles) {
         const files = detectedFiles[manager as PackageManager];
         if (!files || !files.manifest) continue; // Need manifest to parse deps

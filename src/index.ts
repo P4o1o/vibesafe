@@ -17,6 +17,7 @@ import { scanForExposedEndpoints, EndpointFinding } from './scanners/endpoints';
 import { checkRateLimitHeuristic, RateLimitFinding } from './scanners/rateLimiting';
 import { scanForLoggingIssues, LoggingFinding } from './scanners/logging';
 import { scanForHttpClientIssues, HttpClientFinding } from './scanners/httpClient';
+import { detectTechnologies } from './frameworkDetection';
 
 // Define a combined finding type if needed later
 
@@ -95,8 +96,34 @@ program.command('scan')
 
     // --- Parse Dependencies (Phase 3.2) ---
     const dependencyInfoList = parseDependencies(detectedManagers);
+    let detectedTech: Record<string, boolean> = {};
     if (dependencyInfoList.length > 0) {
         console.log(`Parsed ${dependencyInfoList.length} dependencies.`);
+        // --- Detect Technologies (Phase 0 Integration) ---
+        const dependencyNames = dependencyInfoList.map(dep => dep.name);
+        detectedTech = detectTechnologies(dependencyNames);
+        // console.log('Detected Technologies:', detectedTech); // Remove raw log
+
+        // --- Log Detected Technologies --- 
+        const detectedCategories = Object.entries(detectedTech)
+            .filter(([, value]) => value)
+            .map(([key]) => key);
+
+        if (detectedCategories.length > 0) {
+            console.log(chalk.blue('Detected Technology Categories:'));
+            detectedCategories.forEach(categoryKey => {
+                // Simple conversion from camelCase key to Title Case string
+                const categoryName = categoryKey
+                    .replace('has', '') // Remove 'has' prefix
+                    .replace(/([A-Z])/g, ' $1') // Add space before capital letters
+                    .replace(/^./, str => str.toUpperCase()) // Capitalize first letter
+                    .trim(); 
+                console.log(chalk.blue(`  - ${categoryName}`));
+            });
+        } else {
+            // Optionally log if nothing specific was detected
+            // console.log(chalk.dim('No specific framework/library categories detected based on dependencies.'));
+        }
     }
 
     // --- Secrets Scan (Phase 2.1 / 2.3) ---
@@ -133,7 +160,7 @@ program.command('scan')
     filesForUploadScan.forEach(filePath => {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
-            const findings = scanForUnvalidatedUploads(filePath, content);
+            const findings = scanForUnvalidatedUploads(filePath, content, detectedTech.hasBackend);
             const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
             allUploadFindings = allUploadFindings.concat(relativeFindings);
         } catch (error: any) {
@@ -150,7 +177,7 @@ program.command('scan')
     filesForEndpointScan.forEach(filePath => {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
-            const findings = scanForExposedEndpoints(filePath, content);
+            const findings = scanForExposedEndpoints(filePath, content, detectedTech.hasBackend);
             const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
             allEndpointFindings = allEndpointFindings.concat(relativeFindings);
         } catch (error: any) {
@@ -161,8 +188,8 @@ program.command('scan')
 
     // --- Rate Limit Heuristic Check (Phase 6.4 - Revised) ---
     console.log('Checking for presence of known rate limiting packages and API routes...');
-    // Pass all parsed dependencies and the files likely containing routes
-    allRateLimitFindings = checkRateLimitHeuristic(dependencyInfoList, filesForEndpointScan);
+    // Pass all parsed dependencies, files, and detected tech context
+    allRateLimitFindings = checkRateLimitHeuristic(dependencyInfoList, filesForEndpointScan, detectedTech);
     if (allRateLimitFindings.length > 0) {
         console.log(chalk.yellow('Found API routes but no known rate-limiting package in dependencies. Added project-level advisory.'));
     } else {
@@ -174,7 +201,7 @@ program.command('scan')
     filesForEndpointScan.forEach(filePath => {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
-            const findings = scanForLoggingIssues(filePath, content);
+            const findings = scanForLoggingIssues(filePath, content, detectedTech.hasBackend);
             const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
             allLoggingFindings = allLoggingFindings.concat(relativeFindings);
         } catch (error: any) {
@@ -187,7 +214,7 @@ program.command('scan')
     filesForEndpointScan.forEach(filePath => {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
-            const findings = scanForHttpClientIssues(filePath, content);
+            const findings = scanForHttpClientIssues(filePath, content, detectedTech.hasBackend);
             const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
             allHttpClientFindings = allHttpClientFindings.concat(relativeFindings);
         } catch (error: any) {
@@ -275,7 +302,7 @@ program.command('scan')
             uploads: reportUploadFindings,
             endpoints: reportEndpointFindings,
             rateLimiting: reportRateLimitFindings,
-            logging: allLoggingFindings, // Use the full list here
+            logging: reportLoggingFindings,
             httpClients: reportHttpClientFindings,
             info: infoSecretFindings,
             gitignoreWarnings: gitignoreWarnings,

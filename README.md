@@ -11,7 +11,7 @@ VibeSafe helps developers quickly check their projects for common security issue
 *   **Configuration Scanning:** Checks JSON and YAML files for common insecure settings (e.g., `DEBUG = true`, `devMode = true`, permissive CORS like `origin: '*'`)
 *   **HTTP Client Issues:** Detects potential missing timeout or cancellation configurations in calls using `axios`, `fetch`, `got`, and `request`. (*See Limitations below*).
 *   **Unvalidated Upload Detection:** Identifies potential missing file size/type restrictions in common upload libraries (`multer`, `formidable`, `express-fileupload`, `busboy`) and generic patterns (`new FormData()`, `<input type="file">`).
-*   **Exposed Endpoint Detection:** Flags potentially sensitive endpoints (e.g., `/admin`, `/debug`, `/status`, `/info`, `/metrics`) in Express/Node.js applications using common routing patterns or string literals.
+*   **Exposed Endpoint Detection:** Flags potentially sensitive endpoints (e.g., `/admin`, `/debug`, `/status`, `/info`, `/metrics`) in Node.js web applications using common routing patterns or string literals.
 *   **Rate Limit Check (Heuristic):** Issues a project-level advisory if API routes are detected but no known rate-limiting package (e.g., `express-rate-limit`, `@upstash/ratelimit`) is found in dependencies.
 *   **Improper Logging Detection:** Flags potential logging of full error objects (e.g., `console.error(err)`), which can leak stack traces, and detects logging of potentially sensitive data based on keywords (e.g., `password`, `email`, `token`).
 *   **Multiple Output Formats:** Provides results via console output (with colors!), JSON (`--output`), or a Markdown report (`--report` with default `VIBESAFE-REPORT.md`).

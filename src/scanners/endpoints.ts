@@ -11,9 +11,9 @@ export interface EndpointFinding {
 }
 
 // Regex patterns for common debug/admin paths
-// Includes common framework patterns (like Express) and simple string literals
-// - Looks for .get, .post, .put, .delete, .use, .all followed by ('/admin...') or similar
-// - Looks for string literals like '/admin', "/debug" etc.
+// Includes common web framework patterns and simple string literals
+// - Looks for common HTTP method/routing function calls (.get, .post, .use, etc.) followed by a sensitive path string
+// - Looks for sensitive path string literals like '/admin', "/debug" etc.
 const DEBUG_ADMIN_ENDPOINT_REGEX = /(\.get|\.post|\.put|\.delete|\.use|\.all)\s*\(\s*['"](\/debug|\/admin|\/status|\/info|\/healthz?|\/metrics|\/console|\/manage|\/config)[\/\w\-\:]*['"]/gi;
 const DEBUG_ADMIN_STRING_LITERAL_REGEX = /['"](\/debug|\/admin|\/status|\/info|\/healthz?|\/metrics|\/console|\/manage|\/config)[\/\w\-\:]*['"]/gi;
 
@@ -24,13 +24,18 @@ const DEBUG_ADMIN_STRING_LITERAL_REGEX = /['"](\/debug|\/admin|\/status|\/info|\
  * @param content The content of the file.
  * @returns An array of EndpointFinding objects.
  */
-export function scanForExposedEndpoints(filePath: string, content: string): EndpointFinding[] {
+export function scanForExposedEndpoints(filePath: string, content: string, hasBackend: boolean): EndpointFinding[] {
+    // If no backend framework detected, skip this scan
+    if (!hasBackend) {
+        return [];
+    }
+
     const findings: EndpointFinding[] = [];
     const lines = content.split('\n');
 
     let match;
 
-    // Check for framework patterns first (e.g., app.get('/admin'))
+    // Check for framework-style route definition patterns first (e.g., app.get('/admin'))
     DEBUG_ADMIN_ENDPOINT_REGEX.lastIndex = 0;
     while ((match = DEBUG_ADMIN_ENDPOINT_REGEX.exec(content)) !== null) {
         const fullMatch = match[0];
