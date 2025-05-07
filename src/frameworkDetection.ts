@@ -120,11 +120,25 @@ export const allKnownPackages: string[] = [
   ...fileUploadPackages,
 ];
 
+// Define the new interface for more granular detection results
+export interface DetectedTechnologies {
+  hasFrontend: boolean;
+  hasBackend: boolean;
+  isNextJs: boolean; // Specific flag for Next.js
+  hasAuth: boolean;
+  hasMiddleware: boolean;
+  hasHttpClient: boolean;
+  hasCors: boolean;
+  hasFileUpload: boolean;
+  // Potentially add other specific framework flags here in the future if needed
+}
+
 // Simple check function (example - can be expanded)
-export const detectTechnologies = (dependencies: string[]): Record<string, boolean> => {
-  const detected: Record<string, boolean> = {
+export const detectTechnologies = (dependencies: string[]): DetectedTechnologies => {
+  const detected: DetectedTechnologies = {
     hasFrontend: false,
     hasBackend: false,
+    isNextJs: false, // Initialize the new flag
     hasAuth: false,
     hasMiddleware: false, // Generic middleware detection
     hasHttpClient: false,
@@ -134,8 +148,16 @@ export const detectTechnologies = (dependencies: string[]): Record<string, boole
 
   const depSet = new Set(dependencies); // Keep Set for efficient lookups of other packages
 
-  if (frontendPackages.some(pkg => depSet.has(pkg))) detected.hasFrontend = true;
-  if (backendPackages.some(pkg => depSet.has(pkg))) detected.hasBackend = true;
+  // Specific check for Next.js
+  if (depSet.has('next')) {
+    detected.isNextJs = true;
+    detected.hasFrontend = true; // Next.js serves a frontend
+    detected.hasBackend = true;  // Next.js has a backend component
+  }
+
+  // General frontend and backend checks (avoid re-setting if Next.js already set them)
+  if (!detected.hasFrontend && frontendPackages.some(pkg => depSet.has(pkg))) detected.hasFrontend = true;
+  if (!detected.hasBackend && backendPackages.some(pkg => depSet.has(pkg) && pkg !== 'next')) detected.hasBackend = true; // Avoid double-counting 'next' if logic changes
   
   // Modified Auth Check: Check predefined list OR if any dependency starts with @clerk/
   if (authPackages.some(pkg => depSet.has(pkg)) || dependencies.some(dep => dep.startsWith('@clerk/'))) {

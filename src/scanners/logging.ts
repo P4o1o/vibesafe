@@ -104,7 +104,7 @@ export function scanForLoggingIssues(filePath: string, content: string, hasBacke
                                 // Check if a PII finding already exists for this specific line
                                 const piiFindingExistsForLine = findings.some(f => 
                                     f.file === filePath && 
-                                    f.line === line && 
+                                                       f.line === line && 
                                     f.type === 'Potential PII Logging'
                                 );
 

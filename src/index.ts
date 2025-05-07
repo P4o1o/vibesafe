@@ -17,7 +17,7 @@ import { scanForExposedEndpoints, EndpointFinding } from './scanners/endpoints';
 import { checkRateLimitHeuristic, RateLimitFinding } from './scanners/rateLimiting';
 import { scanForLoggingIssues, LoggingFinding } from './scanners/logging';
 import { scanForHttpClientIssues, HttpClientFinding } from './scanners/httpClient';
-import { detectTechnologies } from './frameworkDetection';
+import { detectTechnologies, DetectedTechnologies } from './frameworkDetection';
 
 // Define a combined finding type if needed later
 
@@ -96,7 +96,17 @@ program.command('scan')
 
     // --- Parse Dependencies (Phase 3.2) ---
     const dependencyInfoList = parseDependencies(detectedManagers);
-    let detectedTech: Record<string, boolean> = {};
+    let detectedTech: DetectedTechnologies = {
+        hasFrontend: false,
+        hasBackend: false,
+        isNextJs: false,
+        hasAuth: false,
+        hasMiddleware: false,
+        hasHttpClient: false,
+        hasCors: false,
+        hasFileUpload: false,
+    };
+
     if (dependencyInfoList.length > 0) {
         console.log(`Parsed ${dependencyInfoList.length} dependencies.`);
         // --- Detect Technologies (Phase 0 Integration) ---
@@ -105,24 +115,29 @@ program.command('scan')
         // console.log('Detected Technologies:', detectedTech); // Remove raw log
 
         // --- Log Detected Technologies --- 
-        const detectedCategories = Object.entries(detectedTech)
-            .filter(([, value]) => value)
-            .map(([key]) => key);
-
-        if (detectedCategories.length > 0) {
-            console.log(chalk.blue('Detected Technology Categories:'));
-            detectedCategories.forEach(categoryKey => {
-                // Simple conversion from camelCase key to Title Case string
-                const categoryName = categoryKey
-                    .replace('has', '') // Remove 'has' prefix
-                    .replace(/([A-Z])/g, ' $1') // Add space before capital letters
-                    .replace(/^./, str => str.toUpperCase()) // Capitalize first letter
-                    .trim(); 
-                console.log(chalk.blue(`  - ${categoryName}`));
-            });
+        if (detectedTech.isNextJs) {
+            console.log(chalk.blue('Detected Technology: Next.js (Full-stack framework)'));
         } else {
-            // Optionally log if nothing specific was detected
-            // console.log(chalk.dim('No specific framework/library categories detected based on dependencies.'));
+            // Fallback to generic category logging if not Next.js or if more specific logging is needed later
+            const detectedCategories = Object.entries(detectedTech)
+                .filter(([, value]) => value) // Filter out isNextJs if already logged, or keep for completeness
+                .map(([key]) => key);
+
+            if (detectedCategories.length > 0) {
+                console.log(chalk.blue('Detected Technology Categories:'));
+                detectedCategories.forEach(categoryKey => {
+                    if (categoryKey === 'isNextJs') return; // Avoid double logging if we decide to keep it in categories
+                    const categoryName = categoryKey
+                        .replace('has', '') // Remove 'has' prefix
+                        .replace(/([A-Z])/g, ' $1') // Add space before capital letters
+                        .replace(/^./, str => str.toUpperCase()) // Capitalize first letter
+                        .trim(); 
+                    console.log(chalk.blue(`  - ${categoryName}`));
+                });
+            } else {
+                // Optionally log if nothing specific was detected
+                // console.log(chalk.dim('No specific framework/library categories detected based on dependencies.'));
+            }
         }
     }
 
@@ -177,7 +192,7 @@ program.command('scan')
     filesForEndpointScan.forEach(filePath => {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
-            const findings = scanForExposedEndpoints(filePath, content, detectedTech.hasBackend);
+            const findings = scanForExposedEndpoints(rootDir, filePath, content, detectedTech);
             const relativeFindings = findings.map(f => ({ ...f, file: path.relative(rootDir, f.file) }));
             allEndpointFindings = allEndpointFindings.concat(relativeFindings);
         } catch (error: any) {
@@ -222,6 +237,10 @@ program.command('scan')
             console.warn(chalk.yellow(`Could not scan ${path.relative(rootDir, filePath)} for HTTP client issues: ${error.message}`));
         }
     });
+
+    // --- DEBUG: Log counts after collection ---
+    // console.log(`[DEBUG] Counts - Secrets: ${allSecretFindings.length}, Dependencies: ${allDependencyFindings.length}, Config: ${allConfigFindings.length}, Uploads: ${allUploadFindings.length}, Endpoints: ${allEndpointFindings.length}, RateLimit: ${allRateLimitFindings.length}, Logging: ${allLoggingFindings.length}, HttpClient: ${allHttpClientFindings.length}`);
+    // ----------------------------------------
 
     // Separate Info findings
     const infoSecretFindings = allSecretFindings.filter(f => f.severity === 'Info');
@@ -361,34 +380,35 @@ program.command('scan')
 
             const groupedFindings: { [key: string]: any[] } = {};
             sortedFindings.forEach((f: any) => { 
-                 // ---- TEMPORARY DEBUG LOG (Removed for now) ----
-                 // console.log('DEBUG Finding:', JSON.stringify(f)); 
-                 // ---------------------------
-                 
-                let typeKey = 'Other Issues Found'; // Default key (Renamed)
-                
-                // ---- Grouping Logic v4.1 ----
-                if (f.type === 'Potential Unsanitized Error Logging' || f.type === 'Potential PII Logging') {
+                let typeKey = 'Other Issues Found'; // Default key
+
+                // ---- Grouping Logic - Revised for Specificity ----
+                const findingType = f.type || ''; // Get the type, default to empty string
+
+                if (findingType.startsWith('Potential Unsanitized Error') || findingType === 'Potential PII Logging') {
                     typeKey = 'Potential Logging Issues Found';
-                // Ensure exact match for Rate Limit type string from its scanner
-                // } else if (f.type === 'Project-Level Rate Limit Advisory') { 
-                //     typeKey = 'Project-Level Rate Limit Advisory Found';
-                // Use 'name' property for dependencies
-                } else if ('name' in f && 'version' in f && 'packageManager' in f) {
+                } else if ('name' in f && 'version' in f && 'packageManager' in f) { // Dependencies still check properties
                     typeKey = 'Dependencies with Issues Found';
-                } else if ('pattern' in f && f.severity !== 'Info') {
-                    typeKey = 'Potential Secrets Found';
-                } else if (f.type === 'Potential Missing Timeout' && 'library' in f) {
+                } else if (findingType === 'Potential Missing Timeout') { // HTTP Client uses type
                     typeKey = 'Potential HTTP Client Issues Found';
-                 } else if (f.type === 'Potentially Exposed Debug/Admin Endpoint' || 'path' in f) {
+                } else if (findingType === 'Potentially Exposed Debug/Admin Endpoint') { // Endpoints use type
                     typeKey = 'Potentially Exposed Endpoints Found';
-                } else if (f.type === 'Missing Upload Size Limit' || f.type === 'Missing Upload File Filter' || f.type === 'Generic File Upload Pattern' || 'patternType' in f) {
+                } else if (findingType === 'Missing Upload Size Limit' || findingType === 'Missing Upload File Filter' || findingType === 'Generic File Upload Pattern') { // Uploads use type
                     typeKey = 'Potential Upload Issues Found';
-                } else if (f.type === 'Permissive CORS' || f.type === 'Insecure Setting' || 'key' in f) {
+                } else if (findingType === 'Permissive CORS' || findingType === 'Insecure Setting') { // Config uses type
                     typeKey = 'Configuration Issues Found';
+                } else if (findingType === 'Project-Level Rate Limit Advisory') { // Explicit Rate Limit type
+                    // Keep it under 'Other Issues Found' for now as per sectionOrder, but could be its own section
+                    typeKey = 'Other Issues Found'; 
+                } else if ('pattern' in f && f.severity !== 'Info' || findingType.includes('API Key') || findingType.includes('Entropy')) { 
+                    // Secrets: Check for pattern OR specific types if they exist
+                    // Note: SecretFinding structure might need standardization with a `type` field
+                    typeKey = 'Potential Secrets Found';
                 }
+                // If none of the above match, it defaults to 'Other Issues Found'
 
                 if (!groupedFindings[typeKey]) groupedFindings[typeKey] = [];
+                // Still avoid adding .env info secrets to the main grouped findings 
                 if (!(typeKey === 'Potential Secrets Found' && f.severity === 'Info')) {
                      groupedFindings[typeKey].push(f);
                 }
@@ -401,10 +421,9 @@ program.command('scan')
                 'Configuration Issues Found',
                 'Potential Upload Issues Found',
                 'Potentially Exposed Endpoints Found',
-                // 'Project-Level Rate Limit Advisory Found', // Removed section title
                 'Potential Logging Issues Found',
                 'Potential HTTP Client Issues Found',
-                'Other Issues Found' // Renamed
+                'Other Issues Found'
             ];
 
             // Print findings grouped by type

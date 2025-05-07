@@ -1,6 +1,7 @@
 import { FindingSeverity, DependencyInfo } from './dependencies'; // Added DependencyInfo
 import fs from 'fs'; // Added fs import
 import path from 'path'; // Added path import
+import { DetectedTechnologies } from '../frameworkDetection'; // Import DetectedTechnologies
 
 export interface RateLimitFinding {
     // file and line are no longer relevant for the project-level warning
@@ -36,7 +37,7 @@ const CONVENTIONAL_API_DIR_REGEX = /[\/](pages[\/]api|app[\/]api)[\/]/i;
  * @param detectedTech Object indicating detected technologies (e.g., { hasBackend: true }).
  * @returns An array containing at most one RateLimitFinding object.
  */
-export function checkRateLimitHeuristic(dependencies: DependencyInfo[], filesToScan: string[], detectedTech: Record<string, boolean>): RateLimitFinding[] {
+export function checkRateLimitHeuristic(dependencies: DependencyInfo[], filesToScan: string[], detectedTech: DetectedTechnologies): RateLimitFinding[] {
     // If no backend framework detected, this heuristic isn't relevant
     if (!detectedTech.hasBackend) {
         return [];

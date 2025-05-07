@@ -21,6 +21,7 @@ app.get('/process/:id', (req, res) => {
         console.error(err); // Logging the full error object to console.error
         logger.error(err); // Logging the full error object using a logger variable
         console.log(err); // Logging full error object to console.log (less common but possible)
+        console.error(err.stack); // Explicitly logging the stack trace
 
         // --- Patterns scanner should *ideally* ignore --- 
         console.error('Error processing request:', err.message); // Logging only the message (Good practice)
@@ -86,5 +87,22 @@ const sampleUser = {
 };
 
 processUserData(sampleUser);
+
+// --- Test case for .catch(console.error) ---
+Promise.reject(new Error('Promise rejected directly')).catch(console.error);
+
+// --- Additional PII Keyword Tests ---
+const sensitiveInfo = {
+    userPassword: 'pass123',
+    apiSecret: 'secret-abc',
+    socialSecurityNumber: '000-00-0000', // SSN
+    encryptionKey: 'key-xyz789'
+};
+
+console.log('Sensitive Object:', sensitiveInfo);
+console.info(`User Password: ${sensitiveInfo.userPassword}`);
+logger.warn('API Secret: ' + sensitiveInfo.apiSecret);
+console.debug({ ssn: sensitiveInfo.socialSecurityNumber });
+console.log('Encryption key used:', sensitiveInfo.encryptionKey);
 
 app.listen(3007, () => console.log('Logging test server running')); 

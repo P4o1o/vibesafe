@@ -158,7 +158,41 @@ export function getFilesToScan(rootDir: string = '.'): string[] {
   ig.add(customIgnorePatterns);
 
   console.log('Starting file traversal...');
-  const files = findFilesRecursive(absoluteRootDir, absoluteRootDir, ig);
-  console.log(`Traversal complete. Found ${files.length} files to scan.`);
-  return files;
+  const allFilesFound = findFilesRecursive(absoluteRootDir, absoluteRootDir, ig);
+  console.log(`Traversal found ${allFilesFound.length} raw files before TS/JS filtering.`);
+
+  // Post-processing to prioritize .ts/.tsx over .js for the same basename in the same directory
+  const tsFiles = new Map<string, string>(); // Map dir/basename -> full .ts/.tsx path
+  const jsFiles = new Map<string, string>();   // Map dir/basename -> full .js path
+  const otherFiles: string[] = [];
+
+  for (const file of allFilesFound) {
+    const ext = path.extname(file).toLowerCase();
+    const basename = path.basename(file, ext); 
+    const dir = path.dirname(file);
+    // Create a key based on directory and basename to correctly pair files
+    const mapKey = path.join(dir, basename);
+
+    if (ext === '.ts' || ext === '.tsx') {
+      tsFiles.set(mapKey, file);
+    } else if (ext === '.js' || ext === '.jsx') { // Also consider .jsx for JS files
+      jsFiles.set(mapKey, file);
+    } else {
+      otherFiles.push(file);
+    }
+  }
+
+  const finalScanList: string[] = [...otherFiles];
+  // Add all TypeScript/TSX files
+  tsFiles.forEach(tsPath => finalScanList.push(tsPath));
+
+  // Add JavaScript/JSX files only if no corresponding TypeScript/TSX file exists
+  jsFiles.forEach((jsPath, mapKey) => {
+    if (!tsFiles.has(mapKey)) { 
+      finalScanList.push(jsPath);
+    }
+  });
+  
+  console.log(`Traversal complete. Filtered to ${finalScanList.length} files for scanning.`);
+  return finalScanList;
 } 

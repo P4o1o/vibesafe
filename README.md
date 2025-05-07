@@ -4,22 +4,46 @@ A CLI tool to scan your codebase for security vibes.
 
 VibeSafe helps developers quickly check their projects for common security issues like exposed secrets, outdated dependencies with known vulnerabilities (CVEs), and generates helpful reports.
 
-## Features
+## ✨ Features
 
-*   **Secret Scanning:** Detects potential secrets using regex patterns (AWS Keys, JWTs, SSH Keys, generic high-entropy strings) and specifically flags secrets found in `.env` files.
-*   **Dependency Scanning:** Parses `package.json` (for npm/yarn projects) and checks dependencies against the OSV.dev vulnerability database for known CVEs. *(Note: Currently only scans direct dependencies listed in `package.json`. Lockfile analysis for precise versions and transitive dependencies is planned for a future update.)*
-*   **Configuration Scanning:** Checks JSON and YAML files for common insecure settings (e.g., `DEBUG = true`, `devMode = true`, permissive CORS like `origin: '*'`)
-*   **HTTP Client Issues:** Detects potential missing timeout or cancellation configurations in calls using `axios`, `fetch`, `got`, and `request`. (*See Limitations below*).
-*   **Unvalidated Upload Detection:** Identifies potential missing file size/type restrictions in common upload libraries (`multer`, `formidable`, `express-fileupload`, `busboy`) and generic patterns (`new FormData()`, `<input type="file">`).
-*   **Exposed Endpoint Detection:** Flags potentially sensitive endpoints (e.g., `/admin`, `/debug`, `/status`, `/info`, `/metrics`) in Node.js web applications using common routing patterns or string literals.
-*   **Rate Limit Check (Heuristic):** Issues a project-level advisory if API routes are detected but no known rate-limiting package (e.g., `express-rate-limit`, `@upstash/ratelimit`) is found in dependencies.
-*   **Improper Logging Detection:** Flags potential logging of full error objects (e.g., `console.error(err)`), which can leak stack traces, and detects logging of potentially sensitive data based on keywords (e.g., `password`, `email`, `token`).
-*   **Multiple Output Formats:** Provides results via console output (with colors!), JSON (`--output`), or a Markdown report (`--report` with default `VIBESAFE-REPORT.md`).
-*   **AI-Powered Suggestions (Optional):** Generates fix suggestions in the Markdown report using OpenAI (requires API key).
-*   **Filtering:** Focus on high-impact issues using `--high-only`.
-*   **Customizable Ignores:** Use a `.vibesafeignore` file (similar syntax to `.gitignore`) to exclude specific files or directories from the scan.
+- 🔐 **Secret Scanning**  
+  Flags AWS keys, JWTs, SSH keys, high-entropy strings, and secrets in `.env` files.
 
-## Installation
+- 📦 **Dependency Vulnerability Detection**  
+  Checks `package.json` dependencies against the [OSV.dev](https://osv.dev) vulnerability database. *(Direct deps only for now — lockfile support coming soon).*
+
+- ⚙️ **Insecure Config Detection**  
+  Scans JSON/YAML for flags like `DEBUG=true`, `devMode`, permissive CORS, etc.
+
+- 🌐 **HTTP Client Scan**  
+  Detects missing timeouts or abort controllers in `axios`, `fetch`, `got`, etc.
+
+- 📤 **Upload Validation Check**  
+  Warns on lack of file size/type checks in `multer`, `formidable`, etc.
+
+- 🔎 **Exposed Endpoint Detection**  
+  Flags risky endpoints like `/admin`, `/debug`, or `/metrics`, including for **Next.js API routes**.
+
+- 🚫 **Missing Rate Limiting (Heuristic)**  
+  Warns if your project has API routes but no known rate-limit package installed.
+
+- 🪵 **Improper Logging Patterns**  
+  Finds logs that may leak sensitive info or log full error stacks unsafely.
+
+- 📄 **Multi-format Output**  
+  Console, JSON (`--output`), or Markdown reports (`--report`).
+
+- 🧠 **AI-Powered Fix Suggestions (Optional)**  
+  Add an OpenAI API key for smart recommendations in Markdown reports.
+
+- 🎯 **Focus on Critical Issues**  
+  Use `--high-only` to trim noise.
+
+- 🙈 **Custom Ignores**  
+  Exclude files using `.vibesafeignore`, just like `.gitignore`.
+
+
+## 📦 Installation
 
 ```bash
 npm install -g vibesafe 
@@ -27,7 +51,7 @@ npm install -g vibesafe
 
 *(Note: Currently, for local development, use `npm link` after building)*
 
-## Usage
+## 🚀 Usage
 
 **Basic Scan (Current Directory):**
 
@@ -83,7 +107,7 @@ vibesafe scan -r ai-report.md
 vibesafe scan --high-only
 ```
 
-## Ignoring Files (.vibesafeignore)
+## 🛑📁 Ignoring Files (.vibesafeignore)
 
 Create a `.vibesafeignore` file in the root of the directory being scanned. Add file paths or glob patterns (one per line) to exclude them from the scan. The syntax is the same as `.gitignore`.
 
@@ -99,7 +123,28 @@ config/legacy-secrets.conf
 # Allow scanning a specific .env file if needed (overrides default info behavior)
 # !.env.production 
 ```
+## 🤝 Contributing
 
-## License
+We welcome contributions from the community!
 
-This project uses a custom proprietary license. Please see the [LICENSE](LICENSE) file for details. TL;DR: Free to use, source visible, but no modification, copying, or redistribution allowed. 
+If you have an idea for a new scanner, a bug fix, or a way to make VibeSafe better, check out our [Contributing Guide](./CONTRIBUTING.md) to get started.
+
+Whether you're submitting a pull request or opening an issue, we appreciate your help in making security tools more developer-friendly.
+
+## 🧾 License
+
+VibeSafe is open source software licensed under the [MIT License](./LICENSE).
+
+You're free to use, modify, and distribute it — even commercially — as long as the original copyright
+and license are included.
+
+For questions or commercial partnership inquiries, contact **vibesafepackage@gmail.com**.
+
+---
+
+## 📛 Trademark Notice
+
+**VibeSafe™** is a trademark of Secret Society LLC.  
+Use of the name “VibeSafe” for derivative tools, competing products, or commercial services is **not permitted without prior written consent.**
+
+You are free to fork or build upon this code under the [MIT License](./LICENSE), but please use a different name and branding for public or commercial distributions.

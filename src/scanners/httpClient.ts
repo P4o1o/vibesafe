@@ -72,6 +72,9 @@ const SUPERAGENT_REQUEST_METHODS = new Set(['get', 'post', 'put', 'patch', 'dele
 // List of known got methods that make requests
 const GOT_REQUEST_METHODS = new Set(['get', 'post', 'put', 'patch', 'head', 'delete', 'stream']);
 
+// Superagent methods (often chained like .get().send() but initial method is key)
+const SUPERAGENT_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'del', 'head', 'options']);
+
 /**
  * Checks a CallExpression node to see if it's a known HTTP client call
  * and if it might be missing timeout configurations.
@@ -154,18 +157,62 @@ function checkForHttpClientCall(node: TSESTree.CallExpression, filePath: string,
               missingTimeout = true;
          }
     }
+    // --- Check for superagent --- 
+    else if (callee.type === TSESTree.AST_NODE_TYPES.Identifier && callee.name === 'superagent') {
+        // Handling direct call like superagent('GET', '/path') - less common
+        library = 'superagent';
+        callDetail = 'superagent(...)';
+        // Superagent timeout typically set via .timeout() method chain.
+        // Statically detecting the absence of this chain is complex.
+        // We will flag the initial call as potentially missing configuration.
+        missingTimeout = true; 
+    } else if (callee.type === TSESTree.AST_NODE_TYPES.MemberExpression && 
+               callee.object.type === TSESTree.AST_NODE_TYPES.Identifier && 
+               callee.object.name === 'superagent' &&
+               callee.property.type === TSESTree.AST_NODE_TYPES.Identifier &&
+               SUPERAGENT_METHODS.has(callee.property.name)) {
+         // Handling superagent.get(...), superagent.post(...)
+         library = 'superagent';
+         callDetail = `superagent.${callee.property.name}`;
+         // Flagging based on initial method call, as timeout is usually chained.
+         missingTimeout = true; 
+    } else if (callee.type === TSESTree.AST_NODE_TYPES.MemberExpression &&
+               callee.object.type === TSESTree.AST_NODE_TYPES.CallExpression && // Check if object is result of a call e.g. request.get(...)
+               callee.object.callee.type === TSESTree.AST_NODE_TYPES.Identifier &&
+               callee.object.callee.name === 'superagent') {
+         // Handling cases like superagent('GET', url).send(...)
+         // Difficult to track timeout across the chain, flag initial detection point.
+         // This detection is basic and might need refinement.
+         library = 'superagent'; 
+         callDetail = `superagent(...).${callee.property.type === TSESTree.AST_NODE_TYPES.Identifier ? callee.property.name : 'method'}`;
+         missingTimeout = true;
+    }
 
     // Add finding logic...
     if (library !== 'unknown' && missingTimeout) {
         if (!findings.some(f => f.file === filePath && f.line === line && f.library === library && f.type === 'Potential Missing Timeout')) {
+            let message = `Potential missing timeout or cancellation signal in ${library} call.`;
+            let details = `Call found: ${callDetail} near line ${line}. Review configuration for timeouts or cancellation.`;
+
+            // Customize message/details for superagent due to chained methods
+            if (library === 'superagent') {
+                message = `Potential missing timeout/cancellation in ${library} call (unable to check chained methods).`;
+                details = `Call found: ${callDetail} near line ${line}. Superagent timeouts are often set via chained .timeout(). Please manually verify timeout/cancellation configuration.`;
+            }
+            // Customize message/details for fetch to mention AbortController
+            else if (library === 'fetch') {
+                message = `Potential missing cancellation signal in ${library} call.`;
+                details = `Call found: ${callDetail} near line ${line}. Fetch requests should use an AbortController signal in the options for timeout/cancellation.`;
+            }
+
             findings.push({
                 file: filePath,
                 line: line,
                 type: 'Potential Missing Timeout', 
                 severity: 'Low', 
                 library: library,
-                message: `Potential missing timeout or cancellation signal in ${library} call.`,
-                details: `Call found: ${callDetail} near line ${line}. Review configuration for timeouts or cancellation.`
+                message: message, // Use customized message
+                details: details  // Use customized details
             });
         }
     }
