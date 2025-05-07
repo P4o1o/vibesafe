@@ -4,6 +4,9 @@ A CLI tool to scan your codebase for security vibes.
 
 VibeSafe helps developers quickly check their projects for common security issues like exposed secrets, outdated dependencies with known vulnerabilities (CVEs), and generates helpful reports.
 
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+
+
 ## ✨ Features
 
 - 🔐 **Secret Scanning**  
