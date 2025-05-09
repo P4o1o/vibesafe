@@ -10,22 +10,6 @@ import { HttpClientFinding } from '../scanners/httpClient';
 import chalk from 'chalk';
 import { GitignoreWarning } from '../utils/fileTraversal';
 
-
-// Initialize OpenAI client
-// The constructor automatically looks for process.env.OPENAI_API_KEY
-let openai: OpenAI | null = null;
-try {
-    // Only initialize if the key is present
-    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'YOUR_OPENAI_API_KEY_HERE') {
-        openai = new OpenAI();
-        console.log('OpenAI client initialized.'); // Log success
-    } else {
-        console.warn('OPENAI_API_KEY environment variable not set or is placeholder. AI suggestions will be skipped.');
-    }
-} catch (error: any) {
-    console.error('Error initializing OpenAI client:', error.message);
-}
-
 export interface ReportData {
     secretFindings: SecretFinding[];
     dependencyFindings: DependencyFinding[];
