@@ -45,14 +45,32 @@ const MIN_ENTROPY_THRESHOLD = 4.0; // Threshold for considering a string high en
 const MIN_STRING_LENGTH_FOR_ENTROPY = 20; // Minimum length of a string to check entropy
 // Regex to find potential candidates for entropy check (e.g., alphanumeric strings > min length)
 // This avoids checking entropy on every single word.
-const ENTROPY_CANDIDATE_REGEX = /[a-zA-Z0-9\/\+=]{20,}/g;
+const ENTROPY_CANDIDATE_REGEX = /[a-zA-Z0-9\/\+=]{20,}/g; // Note: Double backslash for literal \ before / and += for regex
+
+// List of common binary file extensions to skip
+const BINARY_FILE_EXTENSIONS = new Set([
+  // Images
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
+  // Fonts
+  '.otf', '.ttf', '.woff', '.woff2', '.eot',
+  // Archives
+  '.zip', '.tar', '.gz', '.rar', '.7z',
+  // Documents
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  // Executables & Libraries
+  '.exe', '.dll', '.so', '.dylib', '.app', '.msi',
+  // Media
+  '.mp3', '.wav', '.ogg', '.mp4', '.mov', '.avi', '.wmv', '.mkv', '.flv',
+  // Other
+  '.class', '.jar', '.pyc', '.pyo', '.o', '.a', '.lib', '.obj', '.swp', '.DS_Store', 'Thumbs.db'
+]);
 
 // --- Regex Patterns ---
 
 // Define basic regex patterns (can be expanded)
 const secretPatterns = [
   // Keep original severity for general cases
-  { type: 'AWS Access Key ID', pattern: /AKIA[0-9A-Z]{16}/g, severity: 'High' as const },
+  { type: 'AWS Access Key ID', pattern: /(?:AKIA|ASIA)[A-Z2-7]{16}/g, severity: 'High' as const },
   { type: 'AWS Secret Access Key', pattern: /(?<![A-Za-z0-9\/+=])[A-Za-z0-9\/+=]{40}(?![A-Za-z0-9\/+=])/g, severity: 'High' as const },
   { type: 'Generic API Key', pattern: /[aA][pP][iI]_?[kK][eE][yY]\s*[:=]\s*['"]?[a-zA-Z0-9\-_]{16,}['"]?/g, severity: 'Medium' as const },
   // Add more patterns: JWT, SSH keys, etc.
@@ -66,6 +84,13 @@ const secretPatterns = [
  */
 export function scanFileForSecrets(filePath: string): SecretFinding[] {
   const findings: SecretFinding[] = [];
+
+  // Skip binary files
+  const fileExtension = path.extname(filePath).toLowerCase();
+  if (BINARY_FILE_EXTENSIONS.has(fileExtension)) {
+    return findings; // Skip scanning for binary files
+  }
+
   // Check if the file is likely an environment file
   const isEnvFile = /\.env($|\.)/.test(path.basename(filePath));
 
@@ -81,12 +106,24 @@ export function scanFileForSecrets(filePath: string): SecretFinding[] {
         let match;
         pattern.lastIndex = 0; // Reset lastIndex for global regex
         while ((match = pattern.exec(lineContent)) !== null) {
+          const matchedValue = match[0];
+
+          // Heuristic for AWS Secret Access Key: check character uniqueness
+          if (type === 'AWS Secret Access Key') {
+            const uniqueChars = new Set(matchedValue.split('')).size;
+            // If fewer than, say, 15 unique characters in a 40-char string,
+            // it's less likely to be a real, complex key.
+            if (uniqueChars < 15) {
+              continue; // Skip this likely false positive
+            }
+          }
+
           findings.push({
             file: filePath,
             line: lineNumber,
             // Adjust type if found in .env file
             type: isEnvFile ? 'Local Environment Secret' : type,
-            value: match[0],
+            value: matchedValue,
             // Downgrade severity to Info if found in .env file
             severity: isEnvFile ? 'Info' : severity,
           });
