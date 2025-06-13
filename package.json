@@ -1,6 +1,6 @@
 {
   "name": "vibesafe",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "A CLI tool to scan your codebase for security vibes.",
   "main": "dist/index.js",
   "bin": {
@@ -45,6 +45,7 @@
   "dependencies": {
     "@types/js-yaml": "^4.0.9",
     "@typescript-eslint/parser": "^8.30.1",
+    "@typescript-eslint/types": "^8.30.1",
     "axios": "^1.8.4",
     "chalk": "^4.1.2",
     "commander": "^13.1.0",
